@@ -1,4 +1,6 @@
 """ Original Author: Haoqiang Fan """
+from __future__ import division
+from past.utils import old_div
 import numpy as np
 import ctypes as ct
 import cv2
@@ -13,8 +15,8 @@ def onmouse(*args):
     global mousex,mousey,changed
     y=args[1]
     x=args[2]
-    mousex=x/float(showsz)
-    mousey=y/float(showsz)
+    mousex=old_div(x,float(showsz))
+    mousey=old_div(y,float(showsz))
     changed=True
 cv2.namedWindow('show3d')
 cv2.moveWindow('show3d',0,0)
@@ -26,7 +28,7 @@ def showpoints(xyz,c_gt=None, c_pred = None ,waittime=0,showrot=False,magnifyBlu
     global showsz,mousex,mousey,zoom,changed
     xyz=xyz-xyz.mean(axis=0)
     radius=((xyz**2).sum(axis=-1)**0.5).max()
-    xyz/=(radius*2.2)/showsz
+    xyz/=old_div((radius*2.2),showsz)
     if c_gt is None:
         c0=np.zeros((len(xyz),),dtype='float32')+255
         c1=np.zeros((len(xyz),),dtype='float32')+255
@@ -38,9 +40,9 @@ def showpoints(xyz,c_gt=None, c_pred = None ,waittime=0,showrot=False,magnifyBlu
 
 
     if normalizecolor:
-        c0/=(c0.max()+1e-14)/255.0
-        c1/=(c1.max()+1e-14)/255.0
-        c2/=(c2.max()+1e-14)/255.0
+        c0/=old_div((c0.max()+1e-14),255.0)
+        c1/=old_div((c1.max()+1e-14),255.0)
+        c2/=old_div((c2.max()+1e-14),255.0)
 
 
     c0=np.require(c0,'float32','C')
@@ -69,7 +71,7 @@ def showpoints(xyz,c_gt=None, c_pred = None ,waittime=0,showrot=False,magnifyBlu
             [np.sin(yangle),0.0,np.cos(yangle)],
             ]))
         rotmat*=zoom
-        nxyz=xyz.dot(rotmat)+[showsz/2,showsz/2,0]
+        nxyz=xyz.dot(rotmat)+[old_div(showsz,2),old_div(showsz,2),0]
 
         ixyz=nxyz.astype('int32')
         show[:]=background
@@ -131,9 +133,9 @@ def showpoints(xyz,c_gt=None, c_pred = None ,waittime=0,showrot=False,magnifyBlu
                     c1=c_pred[:,1]
                     c2=c_pred[:,2]
             if normalizecolor:
-                c0/=(c0.max()+1e-14)/255.0
-                c1/=(c1.max()+1e-14)/255.0
-                c2/=(c2.max()+1e-14)/255.0
+                c0/=old_div((c0.max()+1e-14),255.0)
+                c1/=old_div((c1.max()+1e-14),255.0)
+                c2/=old_div((c2.max()+1e-14),255.0)
             c0=np.require(c0,'float32','C')
             c1=np.require(c1,'float32','C')
             c2=np.require(c2,'float32','C')

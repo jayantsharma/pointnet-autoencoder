@@ -4,6 +4,7 @@ Using GPU Chamfer's distance loss. Required to have 2048 points.
 Author: Charles R. Qi
 Date: May 2018
 """
+from __future__ import print_function
 import tensorflow as tf
 import numpy as np
 import math

@@ -4,6 +4,7 @@ Using GPU Earth Mover's distance loss.
 Author: Charles R. Qi
 Date: May 2018
 """
+from __future__ import print_function
 import tensorflow as tf
 import numpy as np
 import math
@@ -93,5 +94,5 @@ if __name__=='__main__':
     with tf.Graph().as_default():
         inputs = tf.zeros((32,1024,3))
         outputs = get_model(inputs, tf.constant(True))
-        print outputs
+        print(outputs)
         loss = get_loss(outputs[0], tf.zeros((32,1024,3)), outputs[1])

@@ -1,7 +1,14 @@
 '''
     Dataset for shapenet part segmentaion.
 '''
+from __future__ import division
+from __future__ import print_function
 
+from builtins import zip
+from builtins import str
+from builtins import range
+from builtins import object
+from past.utils import old_div
 import os
 import os.path
 import json
@@ -15,7 +22,7 @@ def pc_normalize(pc):
     centroid = np.mean(pc, axis=0)
     pc = pc - centroid
     m = np.max(np.sqrt(np.sum(pc**2, axis=1)))
-    pc = pc / m
+    pc = old_div(pc, m)
     return pc
 
 def rotate_point_cloud(batch_data):
@@ -27,7 +34,7 @@ def rotate_point_cloud(batch_data):
           BxNx3 array, rotated batch of point clouds
     """
     rotated_data = np.zeros(batch_data.shape, dtype=np.float32)
-    for k in xrange(batch_data.shape[0]):
+    for k in range(batch_data.shape[0]):
         rotation_angle = np.random.uniform() * 2 * np.pi
         cosval = np.cos(rotation_angle)
         sinval = np.sin(rotation_angle)
@@ -38,7 +45,7 @@ def rotate_point_cloud(batch_data):
         rotated_data[k, ...] = np.dot(shape_pc.reshape((-1, 3)), rotation_matrix)
     return rotated_data
 
-class PartDataset():
+class PartDataset(object):
     def __init__(self, root, npoints = 2500, classification = False, class_choice = None, split='train', normalize=True):
         self.npoints = npoints
         self.root = root
@@ -53,7 +60,7 @@ class PartDataset():
                 ls = line.strip().split()
                 self.cat[ls[0]] = ls[1]
         if class_choice is not None:
-            self.cat = {k:v for k,v in self.cat.items() if k in class_choice}
+            self.cat = {k:v for k,v in list(self.cat.items()) if k in class_choice}
             
         self.meta = {}
         with open(os.path.join(self.root, 'train_test_split', 'shuffled_train_file_list.json'), 'r') as f:
@@ -89,10 +96,10 @@ class PartDataset():
                 self.datapath.append((item, fn[0], fn[1]))
             
          
-        self.classes = dict(zip(self.cat, range(len(self.cat))))  
+        self.classes = dict(list(zip(self.cat, list(range(len(self.cat))))))  
         self.num_seg_classes = 0
         if not self.classification:
-            for i in range(len(self.datapath)/50):
+            for i in range(old_div(len(self.datapath),50)):
                 l = len(np.unique(np.loadtxt(self.datapath[i][-1]).astype(np.uint8)))
                 if l > self.num_seg_classes:
                     self.num_seg_classes = l
@@ -135,9 +142,9 @@ if __name__ == '__main__':
     tic = time.time()
     i = 100
     ps, seg = d[i]
-    print np.max(seg), np.min(seg)
+    print(np.max(seg), np.min(seg))
     print(time.time() - tic)
-    print(ps.shape, type(ps), seg.shape,type(seg))
+    print((ps.shape, type(ps), seg.shape,type(seg)))
     sys.path.append('utils')
     import show3d_balls
     show3d_balls.showpoints(ps, ballradius=8)
@@ -145,5 +152,5 @@ if __name__ == '__main__':
     d = PartDataset(root = os.path.join(BASE_DIR, 'data/shapenetcore_partanno_segmentation_benchmark_v0'), classification = True)
     print(len(d))
     ps, cls = d[0]
-    print(ps.shape, type(ps), cls.shape,type(cls))
+    print((ps.shape, type(ps), cls.shape,type(cls)))
 

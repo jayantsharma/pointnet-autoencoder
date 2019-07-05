@@ -4,6 +4,7 @@ Using CPU Chamfer's distance loss.
 Author: Charles R. Qi
 Date: May 2018
 """
+from __future__ import print_function
 import tensorflow as tf
 import numpy as np
 import math

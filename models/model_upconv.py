@@ -4,10 +4,12 @@ Using GPU Chamfer's distance loss. Required to have 2048 points.
 Author: Charles R. Qi
 Date: May 2018
 """
+from __future__ import print_function
 import tensorflow as tf
 import numpy as np
 import math
 import sys
+import ipdb
 import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
@@ -34,7 +36,7 @@ def get_model(point_cloud, is_training, bn_decay=None):
     """
     batch_size = point_cloud.get_shape()[0].value
     num_point = point_cloud.get_shape()[1].value
-    assert(num_point==2048)
+    # assert(num_point==2048)
     point_dim = point_cloud.get_shape()[2].value
     end_points = {}
 
@@ -64,21 +66,20 @@ def get_model(point_cloud, is_training, bn_decay=None):
     global_feat = tf_util.max_pool2d(net, [num_point,1],
                                      padding='VALID', scope='maxpool')
 
-    net = tf.reshape(global_feat, [batch_size, -1])
+    net = tf.squeeze(global_feat, axis=[1,2])
     net = tf_util.fully_connected(net, 1024, bn=True, is_training=is_training, scope='fc00', bn_decay=bn_decay)
 
-    net = tf.reshape(net, [batch_size, -1])
     end_points['embedding'] = net
 
     # UPCONV Decoder
-    net = tf.reshape(net, [batch_size, 1, 2, -1])
+    net = tf.reshape(net, [-1, 1, 2, 512])
     net = tf_util.conv2d_transpose(net, 512, kernel_size=[2,2], stride=[2,2], padding='VALID', scope='upconv1', bn=True, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 256, kernel_size=[3,3], stride=[1,1], padding='VALID', scope='upconv2', bn=True, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 256, kernel_size=[4,5], stride=[2,3], padding='VALID', scope='upconv3', bn=True, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 128, kernel_size=[5,7], stride=[3,3], padding='VALID', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 3, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv5', activation_fn=None)
+    net = tf_util.conv2d_transpose(net, 6, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv5', activation_fn=None)
     end_points['xyzmap'] = net
-    net = tf.reshape(net, [batch_size, -1, 3])
+    net = tf.reshape(net, [batch_size, -1, 6])
 
     return net, end_points
 

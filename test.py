@@ -1,3 +1,8 @@
+from __future__ import division
+from __future__ import print_function
+from builtins import str
+from builtins import range
+from past.utils import old_div
 import tensorflow as tf
 import numpy as np
 import argparse
@@ -59,7 +64,7 @@ def get_model(batch_size, num_point):
 def inference(sess, ops, pc, batch_size):
     ''' pc: BxNx3 array, return BxN pred '''
     assert pc.shape[0]%batch_size == 0
-    num_batches = pc.shape[0]/batch_size
+    num_batches = old_div(pc.shape[0],batch_size)
     logits = np.zeros((pc.shape[0], pc.shape[1], 3))
     for i in range(num_batches):
         feed_dict = {ops['pointclouds_pl']: pc[i*batch_size:(i+1)*batch_size,...],

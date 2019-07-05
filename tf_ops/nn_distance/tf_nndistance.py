@@ -3,7 +3,11 @@
 Original author: Haoqiang Fan.
 Modified by Charles R. Qi
 """
+from __future__ import division
+from __future__ import print_function
 
+from builtins import range
+from past.utils import old_div
 import tensorflow as tf
 from tensorflow.python.framework import ops
 import sys
@@ -58,11 +62,11 @@ if __name__=='__main__':
         t0=time.time()
         t1=t0
         best=1e100
-        for i in xrange(100):
+        for i in range(100):
             trainloss,_=sess.run([loss,train])
             newt=time.time()
             best=min(best,newt-t1)
-            print i,trainloss,(newt-t0)/(i+1),best
+            print(i,trainloss,old_div((newt-t0),(i+1)),best)
             t1=newt
         #print sess.run([inp1,retb,inp2,retd])
         #grads=compute_gradient([inp1,inp2],[(16,32,3),(16,32,3)],loss,(1,),[xyz1,xyz2])

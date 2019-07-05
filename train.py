@@ -1,3 +1,8 @@
+from __future__ import division
+from __future__ import print_function
+from builtins import str
+from builtins import range
+from past.utils import old_div
 import argparse
 import math
 from datetime import datetime
@@ -8,6 +13,9 @@ import socket
 import importlib
 import os
 import sys
+import ipdb
+import pickle
+from scipy.io import savemat
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
 sys.path.append(BASE_DIR) # model
@@ -16,6 +24,8 @@ sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 sys.path.append(os.path.join(ROOT_DIR, 'data_prep'))
 import part_dataset
 import show3d_balls
+sys.path.insert(0, '/home/jayant/pointnet/airsim')
+from input_pipeline import input_pipeline
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--gpu', type=int, default=0, help='GPU to use [default: GPU 0]')
@@ -45,6 +55,7 @@ OPTIMIZER = FLAGS.optimizer
 DECAY_STEP = FLAGS.decay_step
 DECAY_RATE = FLAGS.decay_rate
 
+sys.path.append('models')
 MODEL = importlib.import_module(FLAGS.model) # import network module
 MODEL_FILE = os.path.join(BASE_DIR, FLAGS.model+'.py')
 LOG_DIR = FLAGS.log_dir
@@ -61,10 +72,10 @@ BN_DECAY_CLIP = 0.99
 
 HOSTNAME = socket.gethostname()
 
-# Shapenet official train/test split
-DATA_PATH = os.path.join(BASE_DIR, 'data/shapenetcore_partanno_segmentation_benchmark_v0')
-TRAIN_DATASET = part_dataset.PartDataset(root=DATA_PATH, npoints=NUM_POINT, classification=False, class_choice=FLAGS.category, split='trainval')
-TEST_DATASET = part_dataset.PartDataset(root=DATA_PATH, npoints=NUM_POINT, classification=False, class_choice=FLAGS.category, split='test')
+# # Shapenet official train/test split
+# DATA_PATH = os.path.join(BASE_DIR, 'data/shapenetcore_partanno_segmentation_benchmark_v0')
+# TRAIN_DATASET = part_dataset.PartDataset(root=DATA_PATH, npoints=NUM_POINT, classification=False, class_choice=FLAGS.category, split='trainval')
+# TEST_DATASET = part_dataset.PartDataset(root=DATA_PATH, npoints=NUM_POINT, classification=False, class_choice=FLAGS.category, split='test')
 
 def log_string(out_str):
     LOG_FOUT.write(out_str+'\n')
@@ -93,10 +104,10 @@ def get_bn_decay(batch):
 
 def train():
     with tf.Graph().as_default():
+        pointclouds_pl, labels_pl = input_pipeline('train', BATCH_SIZE)
+
         with tf.device('/gpu:'+str(GPU_INDEX)):
-            pointclouds_pl, labels_pl = MODEL.placeholder_inputs(BATCH_SIZE, NUM_POINT)
             is_training_pl = tf.placeholder(tf.bool, shape=())
-            print is_training_pl
             
             # Note the global_step=batch parameter to minimize. 
             # That tells the optimizer to helpfully increment the 'batch' parameter for you every time it trains.
@@ -104,13 +115,13 @@ def train():
             bn_decay = get_bn_decay(batch)
             tf.summary.scalar('bn_decay', bn_decay)
 
-            print "--- Get model and loss"
+            print("--- Get model and loss")
             # Get model and loss 
             pred, end_points = MODEL.get_model(pointclouds_pl, is_training_pl, bn_decay=bn_decay)
             loss, end_points = MODEL.get_loss(pred, labels_pl, end_points)
             tf.summary.scalar('loss', loss)
 
-            print "--- Get training operator"
+            print("--- Get training operator")
             # Get training operator
             learning_rate = get_learning_rate(batch)
             tf.summary.scalar('learning_rate', learning_rate)
@@ -121,13 +132,12 @@ def train():
             train_op = optimizer.minimize(loss, global_step=batch)
             
             # Add ops to save and restore all the variables.
-            saver = tf.train.Saver()
+            saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
         
         # Create a session
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         config.allow_soft_placement = True
-        config.log_device_placement = False
         sess = tf.Session(config=config)
 
         # Add summary writers
@@ -151,21 +161,83 @@ def train():
                'end_points': end_points}
 
         best_loss = 1e20
-        for epoch in range(MAX_EPOCH):
+        for epoch in range(1, MAX_EPOCH+1):
             log_string('**** EPOCH %03d ****' % (epoch))
             sys.stdout.flush()
              
             train_one_epoch(sess, ops, train_writer)
-            epoch_loss = eval_one_epoch(sess, ops, test_writer)
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss
-                save_path = saver.save(sess, os.path.join(LOG_DIR, "best_model_epoch_%03d.ckpt"%(epoch)))
-                log_string("Model saved in file: %s" % save_path)
+            # epoch_loss = eval_one_epoch(sess, ops, test_writer)
+            # if epoch_loss < best_loss:
+            #     best_loss = epoch_loss
+            #     save_path = saver.save(sess, os.path.join(LOG_DIR, "best_model_epoch_%03d.ckpt"%(epoch)))
+            #     log_string("Model saved in file: %s" % save_path)
 
             # Save the variables to disk.
             if epoch % 10 == 0:
-                save_path = saver.save(sess, os.path.join(LOG_DIR, "model.ckpt"))
+                save_path = saver.save(sess, os.path.join(LOG_DIR, "model.ckpt"), global_step=epoch)
                 log_string("Model saved in file: %s" % save_path)
+
+
+def eval():
+    with tf.Graph().as_default():
+        pointclouds_pl, labels_pl = input_pipeline('test', 1)
+
+        with tf.device('/gpu:'+str(GPU_INDEX)):
+            is_training_pl = tf.placeholder(tf.bool, shape=())
+            
+            # Note the global_step=batch parameter to minimize. 
+            # That tells the optimizer to helpfully increment the 'batch' parameter for you every time it trains.
+            batch = tf.Variable(0)
+            bn_decay = get_bn_decay(batch)
+
+            # # Get model and loss 
+            pred, end_points = MODEL.get_model(pointclouds_pl, is_training_pl, bn_decay=bn_decay)
+            loss, end_points = MODEL.get_loss(pred, labels_pl, end_points)
+        
+        # Add ops to save and restore all the variables.
+        saver = tf.train.Saver(keep_checkpoint_every_n_hours=0.5)
+            
+        # Create a session
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        config.allow_soft_placement = True
+        sess = tf.Session(config=config)
+
+        # Init variables
+        ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
+        print(ckpt_path)
+        saver.restore(sess, ckpt_path)
+        # init = tf.global_variables_initializer()
+        # sess.run(init, {is_training_pl:True})
+
+        ops = {'pointclouds_pl': pointclouds_pl,
+               'labels_pl': labels_pl,
+               'is_training_pl': is_training_pl,
+               'pred': pred,
+               'loss': loss,
+               'step': batch}
+        total_loss = 0
+
+        i = 0
+        while True:
+            try:
+                local, future, predicted, lss = sess.run([ pointclouds_pl, labels_pl, pred, loss ], feed_dict={ is_training_pl: False })
+                local = np.squeeze(local)
+                future = np.squeeze(future)
+                predicted = np.squeeze(predicted)
+                total_loss += lss
+
+                # Bookkeeping
+                i += 1
+                fname = '{}/cloud{:07d}.pkl'.format(LOG_DIR, i)
+                with open(fname, 'wb') as f:
+                    data = { 'local': local, 'gt': future, 'predicted': predicted, 'loss': lss }
+                    pickle.dump(data, f)
+                    savemat(fname[:-4] + '.mat', data)
+            except tf.errors.OutOfRangeError:
+                print('Iters: {}, Total loss: {:.2f}'.format(i, total_loss/i))
+                break
+
 
 def get_batch(dataset, idxs, start_idx, end_idx):
     bsize = end_idx-start_idx
@@ -182,26 +254,18 @@ def train_one_epoch(sess, ops, train_writer):
     is_training = True
     
     # Shuffle train samples
-    train_idxs = np.arange(0, len(TRAIN_DATASET))
-    np.random.shuffle(train_idxs)
-    num_batches = len(TRAIN_DATASET)/BATCH_SIZE
-    
-    log_string(str(datetime.now()))
+    num_files = 100 # set manually for now
+    num_batches = old_div(num_files,BATCH_SIZE)
 
     loss_sum = 0
     pcloss_sum = 0
     for batch_idx in range(num_batches):
-        start_idx = batch_idx * BATCH_SIZE
-        end_idx = (batch_idx+1) * BATCH_SIZE
-        batch_data, batch_label = get_batch(TRAIN_DATASET, train_idxs, start_idx, end_idx)
-        # Augment batched point clouds by rotation
-        if FLAGS.no_rotation:
-            aug_data = batch_data
-        else:
-            aug_data = part_dataset.rotate_point_cloud(batch_data)
-        feed_dict = {ops['pointclouds_pl']: aug_data,
-                     ops['labels_pl']: aug_data,
-                     ops['is_training_pl']: is_training,}
+        # # Augment batched point clouds by rotation
+        # if FLAGS.no_rotation:
+        #     aug_data = batch_data
+        # else:
+        #     aug_data = part_dataset.rotate_point_cloud(batch_data)
+        feed_dict = {ops['is_training_pl']: is_training}
         summary, step, _, loss_val, pcloss_val, pred_val = sess.run([ops['merged'], ops['step'],
             ops['train_op'], ops['loss'], ops['end_points']['pcloss'], ops['pred']], feed_dict=feed_dict)
         train_writer.add_summary(summary, step)
@@ -210,10 +274,8 @@ def train_one_epoch(sess, ops, train_writer):
 
         if (batch_idx+1)%10 == 0:
             log_string(' -- %03d / %03d --' % (batch_idx+1, num_batches))
-            log_string('mean loss: %f' % (loss_sum / 10))
-            log_string('mean pc loss: %f' % (pcloss_sum / 10))
-            total_correct = 0
-            total_seen = 0
+            log_string('mean loss: %f' % (old_div(loss_sum, 10)))
+            log_string('mean pc loss: %f' % (old_div(pcloss_sum, 10)))
             loss_sum = 0
             pcloss_sum = 0
         
@@ -223,7 +285,7 @@ def eval_one_epoch(sess, ops, test_writer):
     global EPOCH_CNT
     is_training = False
     test_idxs = np.arange(0, len(TEST_DATASET))
-    num_batches = len(TEST_DATASET)/BATCH_SIZE
+    num_batches = old_div(len(TEST_DATASET),BATCH_SIZE)
 
     log_string(str(datetime.now()))
     log_string('---- EPOCH %03d EVALUATION ----'%(EPOCH_CNT))
@@ -243,14 +305,15 @@ def eval_one_epoch(sess, ops, test_writer):
         test_writer.add_summary(summary, step)
         loss_sum += loss_val
         pcloss_sum += pcloss_val
-    log_string('eval mean loss: %f' % (loss_sum / float(num_batches)))
-    log_string('eval mean pc loss: %f' % (pcloss_sum / float(num_batches)))
+    log_string('eval mean loss: %f' % (old_div(loss_sum, float(num_batches))))
+    log_string('eval mean pc loss: %f' % (old_div(pcloss_sum, float(num_batches))))
          
     EPOCH_CNT += 1
-    return loss_sum/float(num_batches)
+    return old_div(loss_sum,float(num_batches))
 
 
 if __name__ == "__main__":
     log_string('pid: %s'%(str(os.getpid())))
     train()
+    # eval()
     LOG_FOUT.close()
