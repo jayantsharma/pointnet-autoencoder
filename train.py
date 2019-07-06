@@ -24,7 +24,6 @@ sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 sys.path.append(os.path.join(ROOT_DIR, 'data_prep'))
 import part_dataset
 import show3d_balls
-sys.path.insert(0, '/home/jayant/pointnet/airsim')
 from input_pipeline import input_pipeline
 
 parser = argparse.ArgumentParser()
@@ -272,7 +271,7 @@ def train_one_epoch(sess, ops, train_writer):
         loss_sum += loss_val
         pcloss_sum += pcloss_val
 
-        if (batch_idx+1)%10 == 0:
+        if (batch_idx+1)%2 == 0:
             log_string(' -- %03d / %03d --' % (batch_idx+1, num_batches))
             log_string('mean loss: %f' % (old_div(loss_sum, 10)))
             log_string('mean pc loss: %f' % (old_div(pcloss_sum, 10)))
@@ -314,6 +313,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 if __name__ == "__main__":
     log_string('pid: %s'%(str(os.getpid())))
-    train()
-    # eval()
+    # train()
+    eval()
     LOG_FOUT.close()

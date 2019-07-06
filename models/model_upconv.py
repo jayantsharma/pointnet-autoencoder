@@ -43,6 +43,7 @@ def get_model(point_cloud, is_training, bn_decay=None):
     input_image = tf.expand_dims(point_cloud, -1)
 
     # Encoder
+    print(input_image.shape)
     net = tf_util.conv2d(input_image, 64, [1,point_dim],
                          padding='VALID', stride=[1,1],
                          bn=True, is_training=is_training,
@@ -66,6 +67,7 @@ def get_model(point_cloud, is_training, bn_decay=None):
     global_feat = tf_util.max_pool2d(net, [num_point,1],
                                      padding='VALID', scope='maxpool')
 
+    print(global_feat.shape)
     net = tf.squeeze(global_feat, axis=[1,2])
     net = tf_util.fully_connected(net, 1024, bn=True, is_training=is_training, scope='fc00', bn_decay=bn_decay)
 
@@ -77,9 +79,9 @@ def get_model(point_cloud, is_training, bn_decay=None):
     net = tf_util.conv2d_transpose(net, 256, kernel_size=[3,3], stride=[1,1], padding='VALID', scope='upconv2', bn=True, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 256, kernel_size=[4,5], stride=[2,3], padding='VALID', scope='upconv3', bn=True, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 128, kernel_size=[5,7], stride=[3,3], padding='VALID', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 6, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv5', activation_fn=None)
+    net = tf_util.conv2d_transpose(net, 3, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv5', activation_fn=None)
     end_points['xyzmap'] = net
-    net = tf.reshape(net, [batch_size, -1, 6])
+    net = tf.reshape(net, [batch_size, -1, 3])
 
     return net, end_points
 
