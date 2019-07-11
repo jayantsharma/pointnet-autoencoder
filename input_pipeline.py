@@ -54,7 +54,12 @@ def preprocess(feat, label, fname_bytes):
     # label = label[:2048,:]
 
     # Each point is XYZRGB, we will predict future pt cloud XYZ from local/input XYZRGB
-    label = label[..., :3]
+    label = label[:, :3]
+
+    # Randomly sample 2048 points from input and combine with output to autoencode complete space
+    feat_sample = tf.random_shuffle(feat)
+    feat_sample = feat_sample[:2048,:3]
+    label = tf.concat((feat_sample, label), 0)
 
     return feat, label, fname_bytes
 
@@ -74,7 +79,7 @@ def input_pipeline(split, batch_size):
 
     # Set shapes - makes life easy
     feat.set_shape([batch_size, 4096, 6])
-    label.set_shape([batch_size, 2048, 3])
+    label.set_shape([batch_size, 4096, 3])
 
     return feat, label, fname_bytes
 
@@ -190,5 +195,5 @@ if __name__ == "__main__":
     # distribute_point_clouds()
 
     # STEP 3
-    write_point_clouds()
+    # write_point_clouds()
     test_pipeline()

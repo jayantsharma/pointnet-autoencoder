@@ -74,11 +74,12 @@ def get_model(point_cloud, is_training, bn_decay=None):
     end_points['embedding'] = net
 
     # UPCONV Decoder
-    net = tf.reshape(net, [-1, 1, 2, 512])
-    net = tf_util.conv2d_transpose(net, 512, kernel_size=[2,2], stride=[2,2], padding='VALID', scope='upconv1', bn=True, bn_decay=bn_decay, is_training=is_training)
+    net = tf.reshape(net, [-1, 1, 1, 1024])
+    net = tf_util.conv2d_transpose(net, 512, kernel_size=[2,2], stride=[1,1], padding='VALID', scope='upconvn', bn=True, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 256, kernel_size=[2,2], stride=[2,2], padding='VALID', scope='upconv1', bn=True, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 256, kernel_size=[3,3], stride=[1,1], padding='VALID', scope='upconv2', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 256, kernel_size=[4,5], stride=[2,3], padding='VALID', scope='upconv3', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 128, kernel_size=[5,7], stride=[3,3], padding='VALID', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 128, kernel_size=[5,5], stride=[3,3], padding='VALID', scope='upconv3', bn=True, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 128, kernel_size=[7,7], stride=[3,3], padding='VALID', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 3, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv5', activation_fn=None)
     end_points['xyzmap'] = net
     net = tf.reshape(net, [batch_size, -1, 3])
