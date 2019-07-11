@@ -275,7 +275,7 @@ def eval():
 
             # Init variables
             ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
-            ckpt_path = "log/model.ckpt-%d" % ckpt_n
+            ckpt_path = "%s/model.ckpt-%d" % (LOG_DIR, ckpt_n)
             print(ckpt_path)
             saver.restore(sess, ckpt_path)
             # init = tf.global_variables_initializer()
