@@ -234,12 +234,16 @@ def eval():
             "lane2": np.zeros(29),
             "lane3": np.zeros(29),
             "lane4": np.zeros(29),
+            "lane5": np.zeros(29),
+            "lane6": np.zeros(33),
             "lane7": np.zeros(33),
             "lane8": np.zeros(33),
             "lane9": np.zeros(33),
             "lane10": np.zeros(33),
+            "hlane1": np.zeros(40),
             "hlane2": np.zeros(40),
             "hlane3": np.zeros(40),
+            "hlane4": np.zeros(40),
             }
     # for ckpt_n in range(50, 501, 50):
     for ckpt_n in [250]:
@@ -293,13 +297,14 @@ def eval():
                     fname = fname[0].decode("utf-8")  # bytearray to string
                     fname_splits = fname[:-4].split("_")
                     if len(fname_splits) == 5:
+                        print(fname)
                         lane, waypt = fname_splits[3:]
                         waypt = int(waypt)
                         lanewise_losses[lane][waypt-1] = lss
 
                     # Bookkeeping
                     i += 1
-                    pkl_fname = "{}/cloud{:07d}.pkl".format(LOG_DIR, i)
+                    pkl_fname = "{}/{}.pkl".format(LOG_DIR, fname[:-4])
                     with open(pkl_fname, "wb") as f:
                         data = {
                             "local": local,
@@ -308,7 +313,7 @@ def eval():
                             "loss": lss,
                         }
                         pickle.dump(data, f)
-                        savemat(fname[:-4] + ".mat", data)
+                        savemat(pkl_fname[:-4] + ".mat", data)
                 except tf.errors.OutOfRangeError:
                     print("Iters: {}, Total loss: {:.2f}".format(i, total_loss / i))
                     losses.append(total_loss / i)
@@ -416,6 +421,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 if __name__ == "__main__":
     log_string("pid: %s" % (str(os.getpid())))
-    train()
-    # eval()
+    # train()
+    eval()
     LOG_FOUT.close()
