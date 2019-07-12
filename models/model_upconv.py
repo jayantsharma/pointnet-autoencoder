@@ -17,6 +17,8 @@ sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 import tf_util
 sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/nn_distance'))
 import tf_nndistance
+sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/approxmatch'))
+import tf_approxmatch
 
 def placeholder_inputs(batch_size, num_point):
     pointclouds_pl = tf.placeholder(tf.float32, shape=(batch_size, num_point, 3))
@@ -90,10 +92,18 @@ def get_model(point_cloud, is_training, bn_decay=None):
 def get_loss(pred, label, end_points):
     """ pred: BxNx3,
         label: BxNx3, """
-    dists_forward,_,dists_backward,_ = tf_nndistance.nn_distance(pred, label)
-    loss = tf.reduce_mean(dists_forward+dists_backward)
+    # # NN distance
+    # dists_forward,_,dists_backward,_ = tf_nndistance.nn_distance(pred, label)
+    # loss = tf.reduce_mean(dists_forward+dists_backward)
+    # end_points['pcloss'] = loss
+    # return loss*100, end_points
+
+    # EMD
+    match = tf_approxmatch.approx_match(label, pred)
+    loss = tf.reduce_mean(tf_approxmatch.match_cost(label, pred, match))
     end_points['pcloss'] = loss
-    return loss*100, end_points
+    tf.summary.scalar('loss', loss)
+    return loss, end_points
 
 
 if __name__=='__main__':
