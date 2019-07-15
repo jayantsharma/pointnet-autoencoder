@@ -24,7 +24,7 @@ K = np.array([[fx, 0, px], [0, fy, py], [0, 0, 1]])
 
 # SfM reconstruction batch size
 TRAJECTORY_BATCH_SIZE = 230
-ROOT = "/home/jayant/monkey/grocery_data/Supermarket/data/360extrapolation"
+ROOT = "/home/jayant/monkey/grocery_data/Supermarket/data/360random"
 
 
 def _parse_example(serialized_record):
@@ -107,9 +107,10 @@ def test_pipeline():
 
 def normalize():
     hash_list = glob("{}/point_cloud_*lane*mat".format(ROOT))
+    foo = 0
     for s in hash_list:
         data = loadmat(s)
-        feat, label = data["pts_local"], data["pts_global"]
+        feat, label = data["sampledPl"], data["sampledPg"]
         norms = np.linalg.norm(feat[:, :3], axis=1)
         unit_ball_radius = max(norms)
         feat[:, :3] = feat[:, :3] / unit_ball_radius
@@ -118,14 +119,16 @@ def normalize():
         global_min = min(np.linalg.norm(label[:, :3], axis=1))
         if not (local_max <= 1 and global_min > 1):
             print("{} {:0.2f}".format(s.split("/")[-1], global_min))
+            foo += 1
         savemat(
             "{}/normalized_{}".format(ROOT, s.split("/")[-1]),
             {"pts_local": feat, "pts_global": label},
         )
+    print('Total violating: %d' % foo)
 
 
 def write_point_clouds():
-    splits = ["train", "val", "test"]
+    splits = ["train", "test"]
 
     def get_tfrecord_example(feat, label, fname):
         example = tf.train.Example(
@@ -195,5 +198,5 @@ if __name__ == "__main__":
     # distribute_point_clouds()
 
     # STEP 3
-    # write_point_clouds()
+    write_point_clouds()
     test_pipeline()

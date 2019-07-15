@@ -16,6 +16,7 @@ import sys
 import ipdb
 import pickle
 from scipy.io import savemat
+from tqdm import tqdm
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
@@ -190,9 +191,12 @@ def train():
         test_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, "test"), sess.graph)
 
         # Init variables
-        init = tf.global_variables_initializer()
-        sess.run(init)
-        # sess.run(init, {is_training_pl: True})
+        ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
+        if ckpt_path:
+            saver.restore(sess, ckpt_path)
+        else:
+            init = tf.global_variables_initializer()
+            sess.run(init)
 
         ops = {
             "pointclouds_pl": pointclouds_pl,
@@ -230,23 +234,23 @@ def train():
 def eval():
     losses = []
     lanewise_losses = {
-            "lane1": np.zeros(29),
-            "lane2": np.zeros(29),
-            "lane3": np.zeros(29),
-            "lane4": np.zeros(29),
-            "lane5": np.zeros(29),
-            "lane6": np.zeros(33),
-            "lane7": np.zeros(33),
-            "lane8": np.zeros(33),
-            "lane9": np.zeros(33),
-            "lane10": np.zeros(33),
-            "hlane1": np.zeros(40),
-            "hlane2": np.zeros(40),
-            "hlane3": np.zeros(40),
-            "hlane4": np.zeros(40),
+            "lane1": np.zeros((8,29)),
+            "lane2": np.zeros((8,29)),
+            "lane3": np.zeros((8,29)),
+            "lane4": np.zeros((8,29)),
+            "lane5": np.zeros((8,29)),
+            "lane6": np.zeros((8,33)),
+            "lane7": np.zeros((8,33)),
+            "lane8": np.zeros((8,33)),
+            "lane9": np.zeros((8,33)),
+            "lane10": np.zeros((8,33)),
+            "hlane1": np.zeros((8,40)),
+            "hlane2": np.zeros((8,40)),
+            "hlane3": np.zeros((8,40)),
+            "hlane4": np.zeros((8,40)),
             }
-    # for ckpt_n in range(50, 501, 50):
-    for ckpt_n in [250]:
+    for ckpt_n in range(50, 361, 50):
+    # for ckpt_n in [250]:
         with tf.Graph().as_default():
             pointclouds_pl, labels_pl, tf_fname = input_pipeline("test", 1)
 
@@ -282,46 +286,49 @@ def eval():
             # sess.run(init, {is_training_pl:True})
 
             total_loss = 0
-            i = 0
-            while True:
-                try:
-                    local, future, predicted, lss, fname = sess.run(
-                        [pointclouds_pl, labels_pl, pred, loss, tf_fname],
-                        feed_dict={is_training_pl: False},
-                    )
-                    local = np.squeeze(local)
-                    future = np.squeeze(future)
-                    predicted = np.squeeze(predicted)
-                    total_loss += lss
+            num_files = len(os.listdir("{}/test".format(data_root)))  # set manually for now
+            # i = 0
+            # while True:
+            for i in tqdm(range(num_files)):
+                # try:
+                local, future, predicted, lss, fname = sess.run(
+                    [pointclouds_pl, labels_pl, pred, loss, tf_fname],
+                    feed_dict={is_training_pl: False},
+                )
+                local = np.squeeze(local)
+                future = np.squeeze(future)
+                predicted = np.squeeze(predicted)
+                total_loss += lss
 
-                    fname = fname[0].decode("utf-8")  # bytearray to string
-                    fname_splits = fname[:-4].split("_")
-                    if len(fname_splits) == 5:
-                        print(fname)
-                        lane, waypt = fname_splits[3:]
-                        waypt = int(waypt)
-                        lanewise_losses[lane][waypt-1] = lss
+                fname = fname[0].decode("utf-8")  # bytearray to string
+                fname_splits = fname[:-4].split("_")
+                lane, waypt = fname_splits[3:5]
+                waypt = int(waypt)
+                ref = 1 if len(fname_splits) == 5 else int(fname_splits[5])
+                # lanewise_losses[lane][ref-1][waypt-1] = lss
 
-                    # Bookkeeping
-                    i += 1
-                    pkl_fname = "{}/{}.pkl".format(LOG_DIR, fname[:-4])
-                    with open(pkl_fname, "wb") as f:
-                        data = {
-                            "local": local,
-                            "gt": future,
-                            "predicted": predicted,
-                            "loss": lss,
-                        }
-                        pickle.dump(data, f)
-                        savemat(pkl_fname[:-4] + ".mat", data)
-                except tf.errors.OutOfRangeError:
-                    print("Iters: {}, Total loss: {:.2f}".format(i, total_loss / i))
-                    losses.append(total_loss / i)
-                    break
+                # Bookkeeping
+                i += 1
+                pkl_fname = "{}/{}.pkl".format(LOG_DIR, fname[:-4])
+                # with open(pkl_fname, "wb") as f:
+                #     data = {
+                #         "local": local,
+                #         "gt": future,
+                #         "predicted": predicted,
+                #         "loss": lss,
+                #     }
+                #     pickle.dump(data, f)
+                #     savemat(pkl_fname[:-4] + ".mat", data)
+                # except tf.errors.OutOfRangeError:
+                    # print("Iters: {}, Total loss: {:.2f}".format(i, total_loss / i))
+                    # losses.append(total_loss / i)
+                    # break
+            print("Iters: {}, Total loss: {:.2f}".format(i, total_loss / i))
+            losses.append(total_loss / i)
     for l in losses:
         print(l)
-    with open("lanewise_losses.pkl", "wb") as f:
-        pickle.dump({ "lanewise_losses": lanewise_losses }, f)
+    # with open("lanewise_losses.pkl", "wb") as f:
+    #    pickle.dump({ "lanewise_losses": lanewise_losses }, f)
     ipdb.set_trace()
 
 
