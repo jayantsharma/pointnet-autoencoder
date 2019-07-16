@@ -10,7 +10,7 @@ using namespace tensorflow;
 using namespace std;
 
 template<class Vector3>
-std::pair<Vector3, Vector3> best_plane_from_points(const std::vector<Vector3> & c){
+pair<Vector3, Vector3> best_plane_from_points(const vector<Vector3> & c){
   // copy coordinates to  matrix in Eigen format
   size_t num_atoms = c.size();
   Eigen::Matrix< Vector3::Scalar, Eigen::Dynamic, Eigen::Dynamic > coord(3, num_atoms);
@@ -26,14 +26,14 @@ std::pair<Vector3, Vector3> best_plane_from_points(const std::vector<Vector3> & 
   //  http://math.stackexchange.com/questions/99299/best-fitting-plane-given-a-set-of-points
   auto svd = coord.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV);
   Vector3 plane_normal = svd.matrixU().rightCols<1>();
-  return std::make_pair(centroid, plane_normal);
+  return make_pair(centroid, plane_normal);
 }
 
 static void planesearch(int b,int n,const float * xyz,float * dist,int * idx){
     for (int i=0;i<b;i++){
       num_nbrs = 5;
-      std::priority_queue<pair<float, int> > nn_dist;
-      // std::priority_queue<float> nn_dist;
+      priority_queue<pair<float, int> > nn_dist;
+      // priority_queue<float> nn_dist;
       // float nn_dist [num_nbrs];
       // float nn_idx [num_nbrs];
       // float max_idx;
@@ -50,7 +50,7 @@ static void planesearch(int b,int n,const float * xyz,float * dist,int * idx){
           float z2=xyz[(i*n+k)*3+2]-z1;
           double d=x2*x2+y2*y2+z2*z2;
           if(k < num_nbrs){
-            nn_dist.push(std::make_pair(d,k));
+            nn_dist.push(make_pair(d,k));
             pair<float, int> max_dist = nn_dist.top();
             // nn_dist[k] = d;
             // nn_idx[k] = k;
@@ -60,7 +60,7 @@ static void planesearch(int b,int n,const float * xyz,float * dist,int * idx){
           }
           else if(d < max_dist.first){
             nn_dist.pop();
-            nn_dist.push(std::make_pair(d,k));
+            nn_dist.push(make_pair(d,k));
             pair<float, int> max_dist = nn_dist.top();
             // if(d < nn_dist[max_idx]){
             //   nn_dist[max_idx] = d;
@@ -75,10 +75,22 @@ static void planesearch(int b,int n,const float * xyz,float * dist,int * idx){
             // }
           }
         }
-        dist[i*n+j]=best;
-        idx[i*n+j]=besti;
 
         // Find best-fit plane now
+        vector<vector <float>> points;
+        for(int k=0; k < num_nbrs; k++){
+          vector<float> point;
+          point.push_back(xyz[(i*n+nn_dist[k].second)*3+0]);
+          point.push_back(xyz[(i*n+nn_dist[k].second)*3+1]);
+          point.push_back(xyz[(i*n+nn_dist[k].second)*3+2]);
+          points.push_back(point);
+        }
+        plane_pair = best_plane_from_points(points);
+        centroid = plane_pair.first;
+        plane_normal = plane_pair.second;
+        dist_from_plane = abs((x1-centroid[0])*plane_normal[0] + (y1-centroid[1])*plane_normal[1] + (z1-centroid[2])*plane_normal[2]);
+        dist[i*n+j]=dist_from_plane;
+        // idx[i*n+j]=besti;
       }
     }
 }
