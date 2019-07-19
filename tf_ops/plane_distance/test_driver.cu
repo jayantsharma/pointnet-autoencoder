@@ -449,291 +449,7 @@ static void knearestnbr(int b,int n,const float * xyz,float * dist, int *idx){
     }
 }
 
-__global__ void NmDistanceKernel(int b,int n,const float * xyz,int m,const float * xyz2,float * result,int * result_i){
-    const int batch=512;
-    __shared__ float buf[batch*3];
-    for (int i=blockIdx.x;i<b;i+=gridDim.x){
-        for (int k2=0;k2<m;k2+=batch){
-            int end_k=min(m,k2+batch)-k2;
-            for (int j=threadIdx.x;j<end_k*3;j+=blockDim.x){
-                buf[j]=xyz2[(i*m+k2)*3+j];
-            }
-            __syncthreads();
-            for (int j=threadIdx.x+blockIdx.y*blockDim.x;j<n;j+=blockDim.x*gridDim.y){
-                float x1=xyz[(i*n+j)*3+0];
-                float y1=xyz[(i*n+j)*3+1];
-                float z1=xyz[(i*n+j)*3+2];
-                int best_i=0;
-                float best=0;
-                int end_ka=end_k-(end_k&3);
-                if (end_ka==batch){
-                    for (int k=0;k<batch;k+=4){
-                        {
-                            float x2=buf[k*3+0]-x1;
-                            float y2=buf[k*3+1]-y1;
-                            float z2=buf[k*3+2]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if (k==0 || d<best){
-                                best=d;
-                                best_i=k+k2;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+3]-x1;
-                            float y2=buf[k*3+4]-y1;
-                            float z2=buf[k*3+5]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if (d<best){
-                                best=d;
-                                best_i=k+k2+1;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+6]-x1;
-                            float y2=buf[k*3+7]-y1;
-                            float z2=buf[k*3+8]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if (d<best){
-                                best=d;
-                                best_i=k+k2+2;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+9]-x1;
-                            float y2=buf[k*3+10]-y1;
-                            float z2=buf[k*3+11]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if (d<best){
-                                best=d;
-                                best_i=k+k2+3;
-                            }
-                        }
-                    }
-                }else{
-                    for (int k=0;k<end_ka;k+=4){
-                        {
-                            float x2=buf[k*3+0]-x1;
-                            float y2=buf[k*3+1]-y1;
-                            float z2=buf[k*3+2]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if (k==0 || d<best){
-                                best=d;
-                                best_i=k+k2;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+3]-x1;
-                            float y2=buf[k*3+4]-y1;
-                            float z2=buf[k*3+5]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if (d<best){
-                                best=d;
-                                best_i=k+k2+1;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+6]-x1;
-                            float y2=buf[k*3+7]-y1;
-                            float z2=buf[k*3+8]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if (d<best){
-                                best=d;
-                                best_i=k+k2+2;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+9]-x1;
-                            float y2=buf[k*3+10]-y1;
-                            float z2=buf[k*3+11]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if (d<best){
-                                best=d;
-                                best_i=k+k2+3;
-                            }
-                        }
-                    }
-                }
-                for (int k=end_ka;k<end_k;k++){
-                    float x2=buf[k*3+0]-x1;
-                    float y2=buf[k*3+1]-y1;
-                    float z2=buf[k*3+2]-z1;
-                    float d=x2*x2+y2*y2+z2*z2;
-                    if (k==0 || d<best){
-                        best=d;
-                        best_i=k+k2;
-                    }
-                }
-                if (k2==0 || result[(i*n+j)]>best){
-                    result[(i*n+j)]=best;
-                    result_i[(i*n+j)]=best_i;
-                }
-            }
-            __syncthreads();
-        }
-    }
-}
-__global__ void JNotEqKNmDistanceKernel(int b,int n,const float * xyz,int m,const float * xyz2,float * result,int * result_i){
-    const int batch=512;
-    __shared__ float buf[batch*3];
-    for (int i=blockIdx.x;i<b;i+=gridDim.x){
-        for (int k2=0;k2<m;k2+=batch){
-            int end_k=min(m,k2+batch)-k2;
-            for (int j=threadIdx.x;j<end_k*3;j+=blockDim.x){
-                buf[j]=xyz2[(i*m+k2)*3+j];
-            }
-            __syncthreads();
-            for (int j=threadIdx.x+blockIdx.y*blockDim.x;j<n;j+=blockDim.x*gridDim.y){
-                float x1=xyz[(i*n+j)*3+0];
-                float y1=xyz[(i*n+j)*3+1];
-                float z1=xyz[(i*n+j)*3+2];
-                int best_i=-10;
-                float best=100;
-                int end_ka=end_k-(end_k&3);
-                if (end_ka==batch){
-                    for (int k=0;k<batch;k+=4){
-                        {
-                            float x2=buf[k*3+0]-x1;
-                            float y2=buf[k*3+1]-y1;
-                            float z2=buf[k*3+2]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if ((k+k2!=j) && (d<best)){
-                                best=d;
-                                best_i=k+k2;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+3]-x1;
-                            float y2=buf[k*3+4]-y1;
-                            float z2=buf[k*3+5]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if ((k+k2+1 != j) && (d<best)){
-                                best=d;
-                                best_i=k+k2+1;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+6]-x1;
-                            float y2=buf[k*3+7]-y1;
-                            float z2=buf[k*3+8]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if ((k+k2+2 != j) && (d<best)){
-                                best=d;
-                                best_i=k+k2+2;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+9]-x1;
-                            float y2=buf[k*3+10]-y1;
-                            float z2=buf[k*3+11]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if ((k+k2+3 != j) && (d<best)){
-                                best=d;
-                                best_i=k+k2+3;
-                            }
-                        }
-                    }
-                }else{
-                    for (int k=0;k<end_ka;k+=4){
-                        {
-                            float x2=buf[k*3+0]-x1;
-                            float y2=buf[k*3+1]-y1;
-                            float z2=buf[k*3+2]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if ((k+k2 != j) && (d<best)){
-                                best=d;
-                                best_i=k+k2;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+3]-x1;
-                            float y2=buf[k*3+4]-y1;
-                            float z2=buf[k*3+5]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if ((k+k2+1 != j) && (d<best)){
-                                best=d;
-                                best_i=k+k2+1;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+6]-x1;
-                            float y2=buf[k*3+7]-y1;
-                            float z2=buf[k*3+8]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if ((k+k2+2 != j) && (d<best)){
-                                best=d;
-                                best_i=k+k2+2;
-                            }
-                        }
-                        {
-                            float x2=buf[k*3+9]-x1;
-                            float y2=buf[k*3+10]-y1;
-                            float z2=buf[k*3+11]-z1;
-                            float d=x2*x2+y2*y2+z2*z2;
-                            if ((k+k2+3 != j) && (d<best)){
-                                best=d;
-                                best_i=k+k2+3;
-                            }
-                        }
-                    }
-                }
-                for (int k=end_ka;k<end_k;k++){
-                    float x2=buf[k*3+0]-x1;
-                    float y2=buf[k*3+1]-y1;
-                    float z2=buf[k*3+2]-z1;
-                    float d=x2*x2+y2*y2+z2*z2;
-                    if ((k+k2 != j) && (d<best)){
-                        best=d;
-                        best_i=k+k2;
-                    }
-                }
-                if (k2==0 || result[(i*n+j)]>best){
-                    result[(i*n+j)]=best;
-                    result_i[(i*n+j)]=best_i;
-                }
-            }
-            __syncthreads();
-        }
-    }
-}
-__global__ void MyNmDistanceKernel(int b,int n,const float * xyz,int m,const float * xyz2,float * result,int * result_i){
-  const int batch=512;
-  __shared__ float buf[batch*3];
-  for (int i=blockIdx.x;i<b;i+=gridDim.x){
-    for (int j=threadIdx.x+blockIdx.y*blockDim.x;j<n;j+=blockDim.x*gridDim.y){
-      float x1=xyz[(i*n+j)*3+0];
-      float y1=xyz[(i*n+j)*3+1];
-      float z1=xyz[(i*n+j)*3+2];
-      // Compare in batches from xyz2
-      for (int k2=0;k2<m;k2+=batch){
-        // Read into shared buffer
-        int end_k=min(m,k2+batch)-k2;
-        for (int l=threadIdx.x;l<end_k*3;l+=blockDim.x){
-          buf[l]=xyz2[(i*m+k2)*3+l];
-        }
-        __syncthreads();
-        // Compare
-        int best_i=0;
-        float best=100;
-        for (int k=0;k<end_k;k++){
-          float x2=buf[k*3+0]-x1;
-          float y2=buf[k*3+1]-y1;
-          float z2=buf[k*3+2]-z1;
-          float d=x2*x2+y2*y2+z2*z2;
-          if (j!=k+k2 && d<best){
-            best=d;
-            best_i=k+k2;
-          }
-        }
-        __syncthreads();
-        if (k2==0 || best < result[(i*n+j)]){
-          result[(i*n+j)]=best;
-          result_i[(i*n+j)]=best_i;
-        }
-      }
-    }
-  }
-}
-__global__ void KNearestNbrDistanceKernel(int b,int n,const float * xyz,float * result,int * result_i){
+__global__ void KNearestNbrDistanceKernel(int b,int n,const float * xyz,float * result,int * result_i, float *result_p, float *result_s){
   const int batch=512;
   const int num_nbrs = 10;
   __shared__ float buf[batch*3];
@@ -784,57 +500,82 @@ __global__ void KNearestNbrDistanceKernel(int b,int n,const float * xyz,float * 
         }
         __syncthreads();
       }
-      // Bubble sort nn_idx by nn_dist
-      // for(int k=0; k<num_nbrs; k++){
-      //   for(int l=num_nbrs-1; l>k; l--){
-      //     if(nn_dist[l] < nn_dist[l-1]){
-      //       // Swap in BOTH nn_idx, nn_dist
-      //       int tmp = nn_idx[l-1];
-      //       nn_idx[l-1] = nn_idx[l];
-      //       nn_idx[l] = tmp;
-      //       float tmpd = nn_dist[l-1];
-      //       nn_dist[l-1] = nn_dist[l];
-      //       nn_dist[l] = tmpd;
-      //     }
-      //   }
-      // }
+
+      // Store k nearest nbr indices
       for(int k=0; k<num_nbrs; k++){
         result_i[(i*n+j)*num_nbrs+k] = nn_idx[k];
       }
+
+      // Init matrices to hold SVD results
+      float **a = new float *[num_nbrs];
+      for(int k=0; k<num_nbrs; k++)
+        a[k] = new float[num_nbrs];
+      float **v = new float *[3];
+      for(int k=0; k<3; k++)
+        v[k] = new float[3];
+      float w[3];
+
+      // Copy over nearest nbrs to a
+      for(int k=0; k<num_nbrs; k++)
+        for(int l=0; l<3; l++)
+          a[k][l] = xyz[(i*n+nn_idx[k])*3+l];
       // Construct matrix of nearest nbrs and get plane normal
-      Matrix<float, Dynamic, Dynamic> coord(3, num_nbrs);
-      for(int k=0; k<num_nbrs; k++){
-        coord(0,k) = xyz[(i*n+nn_idx[k])*3+0];
-        coord(1,k) = xyz[(i*n+nn_idx[k])*3+1];
-        coord(2,k) = xyz[(i*n+nn_idx[k])*3+2];
-      }
+      // Matrix<float, Dynamic, Dynamic> coord(3, num_nbrs);
+      // for(int k=0; k<num_nbrs; k++){
+      //   coord(0,k) = xyz[(i*n+nn_idx[k])*3+0];
+      //   coord(1,k) = xyz[(i*n+nn_idx[k])*3+1];
+      //   coord(2,k) = xyz[(i*n+nn_idx[k])*3+2];
+      // }
+
       // calculate centroid
-      Vector3f centroid(coord.row(0).mean(), coord.row(1).mean(), coord.row(2).mean());
+      // Vector3f centroid(coord.row(0).mean(), coord.row(1).mean(), coord.row(2).mean());
+      float centroidx = 0;
+      float centroidy = 0;
+      float centroidz = 0;
+      for(int k=0; k<num_nbrs; k++){
+        centroidx += a[k][0];
+        centroidy += a[k][1];
+        centroidz += a[k][2];
+      }
+      centroidx /= num_nbrs;
+      centroidy /= num_nbrs;
+      centroidz /= num_nbrs;
+
       // subtract centroid
-      coord.row(0).array() -= centroid(0); coord.row(1).array() -= centroid(1); coord.row(2).array() -= centroid(2);
+      // coord.row(0).array() -= centroid(0); coord.row(1).array() -= centroid(1); coord.row(2).array() -= centroid(2);
+      for(int k=0; k<num_nbrs; k++){
+        a[k][0] -= centroidx;
+        a[k][1] -= centroidy;
+        a[k][2] -= centroidz;
+      }
 
-      //EXP
-      FullPivLU<MatrixXf> lu(coord);
-      CompleteOrthogonalDecomposition<Matrix<double, Dynamic, Dynamic> > cod;
+      // Calculate SVD
+      dsvd(a, num_nbrs, 3, w, v);
+      // Find smallest singular value
+      int minidx = (w[0] < w[1]) ? 0 : 1 ;
+      minidx = (w[minidx] < w[2]) ? minidx : 2 ;
 
-      // We only need the left-singular matrix here
-      // http://math.stackexchange.com/questions/99299/best-fitting-plane-given-a-set-of-points
-      // auto svd = coord.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV);
-      auto svd = coord.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV);
-      Vector3f plane_normal = svd.matrixU().rightCols<1>();
+      float normal[3];
+      normal[0] = v[0][minidx];
+      normal[1] = v[1][minidx];
+      normal[2] = v[2][minidx];
+      result_p[(i*n+j)*3+0] = abs(normal[0]);
+      result_p[(i*n+j)*3+1] = abs(normal[1]);
+      result_p[(i*n+j)*3+2] = abs(normal[2]);
 
-      float dist_from_plane = abs((x1-centroid(0))*plane_normal(0) + (y1-centroid(1))*plane_normal(1) + (z1-centroid(2))*plane_normal(2));
-      result[i*n+j] = 0.5*dist_from_plane*dist_from_plane;
+      // Sort and store
+      result_s[(i*n+j)*3+0] = w[2];
+      result_s[(i*n+j)*3+1] = w[1];
+      result_s[(i*n+j)*3+2] = w[0];
+
+      // Calculate offset
+      float offset = (x1-centroidx)*normal[0] + (y1-centroidy)*normal[1] + (z1-centroidz)*normal[2];
+      result[i*n+j] = 0.5*offset*offset;
     }
   }
 }
-void NmDistanceKernelLauncher(int b,int n,int m,const float * xyz,const float * xyz2,float * result,int * result_i){
-    // NmDistanceKernel<<<dim3(32,16,1),512>>>(b,n,xyz,m,xyz2,result,result_i);
-    // JNotEqKNmDistanceKernel<<<dim3(32,16,1),512>>>(b,n,xyz,m,xyz2,result,result_i);
-    MyNmDistanceKernel<<<dim3(32,16,1),512>>>(b,n,xyz,m,xyz2,result,result_i);
-}
-void KNearestNbrDistanceKernelLauncher(int b,int n,const float * xyz,float * result,int * result_i){
-    KNearestNbrDistanceKernel<<<dim3(32,16,1),512>>>(b,n,xyz,result,result_i);
+void KNearestNbrDistanceKernelLauncher(int b,int n,const float * xyz,float * result,int * result_i, float *result_p, float *result_s){
+    KNearestNbrDistanceKernel<<<dim3(32,16,1),512>>>(b,n,xyz,result,result_i,result_p,result_s);
 }
 
 int main(){
@@ -844,11 +585,14 @@ int main(){
   // float* xyz = new float[b*n*3];
   // float* dist = new float[b*n];
   // int* idx = new int[b*n];
-  float *xyz, *dist;
+  float *xyz;
+  float *dist, *plane, *svalues;
   int *idx;
   int num_nbrs=10;
   cudaMallocManaged(&xyz, b*n*3*sizeof(float));
   cudaMallocManaged(&dist, b*n*sizeof(float));
+  cudaMallocManaged(&plane, b*n*3*sizeof(float));
+  cudaMallocManaged(&svalues, b*n*3*sizeof(float));
   cudaMallocManaged(&idx, b*n*num_nbrs*sizeof(int));
   
   // Read point cloud
@@ -861,7 +605,7 @@ int main(){
   // GPU
   for(int i=0; i<1; i++){
     // NmDistanceKernelLauncher(b, n, m, xyz, xyz, dist, idx);
-    KNearestNbrDistanceKernelLauncher(b, n, xyz, dist, idx);
+    KNearestNbrDistanceKernelLauncher(b, n, xyz, dist, idx, plane, svalues);
     cudaDeviceSynchronize();
   }
 
@@ -881,8 +625,22 @@ int main(){
   }
   fclose(pfile);
 
+  pfile = fopen("ans_planenormals_gpu.txt","w");
+  for (int i=0; i < b*n; i+=1){
+    fprintf(pfile, "%.3f %.3f %.3f\n", plane[i*3+0], plane[i*3+1], plane[i*3+2]);
+  }
+  fclose(pfile);
+
+  pfile = fopen("ans_planesvalues_gpu.txt","w");
+  for (int i=0; i < b*n; i+=1){
+    sort(svalues+i*3, svalues+i*3+3);
+    fprintf(pfile, "%.3f %.3f %.3f\n", svalues[i*3+2], svalues[i*3+1], svalues[i*3+0]);
+  }
+  fclose(pfile);
+
   cudaFree(xyz);
   cudaFree(dist);
+  cudaFree(plane);
   cudaFree(idx);
 
   return 0;
