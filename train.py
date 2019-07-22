@@ -163,8 +163,16 @@ def train():
             pred, end_points = MODEL.get_model(
                 pointclouds_pl, is_training_pl, bn_decay=bn_decay
             )
-            loss, end_points = MODEL.get_loss(pred, labels_pl, end_points)
-            tf.summary.scalar("loss", loss)
+            """
+            The loss is composed of 2 parts:
+            1. Matching distribution loss imposed between predicted and target point clouds via Chamfer or EMD
+            2. Self-consistency loss for better alignment of planes imposed on prediction
+            """
+            matching_loss, end_points = MODEL.get_matching_loss(pred, labels_pl, end_points)
+            # end_points["pcloss"] = tf.constant(42)
+            consistency_loss = MODEL.get_plane_consistency_loss(pred)
+            loss = matching_loss + consistency_loss
+            tf.summary.scalar("losses/total", loss)
 
             print("--- Get training operator")
             # Get training operator
@@ -174,7 +182,19 @@ def train():
                 optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=MOMENTUM)
             elif OPTIMIZER == "adam":
                 optimizer = tf.train.AdamOptimizer(learning_rate)
-            train_op = optimizer.minimize(loss, global_step=batch)
+
+            grads_and_vars = optimizer.compute_gradients(matching_loss)
+            for (grad,var) in grads_and_vars:
+                if 'upconv5/weights' in var.name:
+                    tf.summary.histogram('gradient/emd/' + var.name, grad)
+            grads_and_vars = optimizer.compute_gradients(consistency_loss)
+            for (grad,var) in grads_and_vars:
+                if 'upconv5/weights' in var.name:
+                    tf.summary.histogram('gradient/plane/' + var.name, grad)
+
+            grads_and_vars = optimizer.compute_gradients(loss)
+            train_op = optimizer.apply_gradients(grads_and_vars, global_step=batch)
+            # train_op = optimizer.minimize(loss, global_step=batch)
 
             # Add ops to save and restore all the variables.
             saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
@@ -234,23 +254,23 @@ def train():
 def eval():
     losses = []
     lanewise_losses = {
-            "lane1": np.zeros((8,29)),
-            "lane2": np.zeros((8,29)),
-            "lane3": np.zeros((8,29)),
-            "lane4": np.zeros((8,29)),
-            "lane5": np.zeros((8,29)),
-            "lane6": np.zeros((8,33)),
-            "lane7": np.zeros((8,33)),
-            "lane8": np.zeros((8,33)),
-            "lane9": np.zeros((8,33)),
-            "lane10": np.zeros((8,33)),
-            "hlane1": np.zeros((8,40)),
-            "hlane2": np.zeros((8,40)),
-            "hlane3": np.zeros((8,40)),
-            "hlane4": np.zeros((8,40)),
+            "lane1": [],
+            "lane2": [],
+            "lane3": [],
+            "lane4": [],
+            "lane5": [],
+            "lane6": [],
+            "lane7": [],
+            "lane8": [],
+            "lane9": [],
+            "lane10": [],
+            "hlane1": [],
+            "hlane2": [],
+            "hlane3": [],
+            "hlane4": [],
             }
-    for ckpt_n in range(50, 361, 50):
-    # for ckpt_n in [250]:
+    # for ckpt_n in range(50, 361, 50):
+    for ckpt_n in [150]:
         with tf.Graph().as_default():
             pointclouds_pl, labels_pl, tf_fname = input_pipeline("test", 1)
 
@@ -306,19 +326,20 @@ def eval():
                 waypt = int(waypt)
                 ref = 1 if len(fname_splits) == 5 else int(fname_splits[5])
                 # lanewise_losses[lane][ref-1][waypt-1] = lss
+                lanewise_losses[lane].append(lss)
 
                 # Bookkeeping
                 i += 1
                 pkl_fname = "{}/{}.pkl".format(LOG_DIR, fname[:-4])
                 # with open(pkl_fname, "wb") as f:
-                #     data = {
-                #         "local": local,
-                #         "gt": future,
-                #         "predicted": predicted,
-                #         "loss": lss,
-                #     }
-                #     pickle.dump(data, f)
-                #     savemat(pkl_fname[:-4] + ".mat", data)
+                data = {
+                    "local": local,
+                    "gt": future,
+                    "predicted": predicted,
+                    "loss": lss,
+                }
+                    # pickle.dump(data, f)
+                savemat(pkl_fname[:-4] + ".mat", data)
                 # except tf.errors.OutOfRangeError:
                     # print("Iters: {}, Total loss: {:.2f}".format(i, total_loss / i))
                     # losses.append(total_loss / i)
@@ -327,8 +348,9 @@ def eval():
             losses.append(total_loss / i)
     for l in losses:
         print(l)
-    # with open("lanewise_losses.pkl", "wb") as f:
-    #    pickle.dump({ "lanewise_losses": lanewise_losses }, f)
+    with open("lanewise_losses.pkl", "wb") as f:
+        lanewise_losses = { k: np.array(v) for k,v in lanewise_losses.items() }
+        pickle.dump({ "lanewise_losses": lanewise_losses }, f)
     ipdb.set_trace()
 
 
@@ -428,6 +450,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 if __name__ == "__main__":
     log_string("pid: %s" % (str(os.getpid())))
-    # train()
-    eval()
+    train()
+    # eval()
     LOG_FOUT.close()

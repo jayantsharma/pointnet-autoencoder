@@ -15,10 +15,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 import tf_util
-sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/nn_distance'))
-import tf_nndistance
+# sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/nn_distance'))
+# import tf_nndistance
 sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/approxmatch'))
 import tf_approxmatch
+sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/plane_distance'))
+import tf_planedistance
 
 def placeholder_inputs(batch_size, num_point):
     pointclouds_pl = tf.placeholder(tf.float32, shape=(batch_size, num_point, 3))
@@ -84,14 +86,16 @@ def get_model(point_cloud, is_training, bn_decay=None):
     net = tf_util.conv2d_transpose(net, 128, kernel_size=[7,7], stride=[3,3], padding='VALID', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 3, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv5', activation_fn=None)
     end_points['xyzmap'] = net
-    net = tf.reshape(net, [batch_size, -1, 3])
+    net = tf.reshape(net, [batch_size, -1, 3], name='prediction')
     print("Output: {}".format(net.shape))
 
     return net, end_points
 
-def get_loss(pred, label, end_points):
+
+def get_matching_loss(pred, label, end_points):
     """ pred: BxNx3,
-        label: BxNx3, """
+        label: BxNx3,
+    """
     # # NN distance
     # dists_forward,_,dists_backward,_ = tf_nndistance.nn_distance(pred, label)
     # loss = tf.reduce_mean(dists_forward+dists_backward)
@@ -100,10 +104,18 @@ def get_loss(pred, label, end_points):
 
     # EMD
     match = tf_approxmatch.approx_match(label, pred)
-    loss = tf.reduce_mean(tf_approxmatch.match_cost(label, pred, match))
-    end_points['pcloss'] = loss
-    tf.summary.scalar('loss', loss)
-    return loss, end_points
+    matching_loss = tf.reduce_mean(tf_approxmatch.match_cost(label, pred, match))
+    tf.summary.scalar('losses/matching', matching_loss)
+    end_points['pcloss'] = matching_loss
+    return matching_loss, end_points
+
+
+def get_plane_consistency_loss(pred):
+    # Plane Distance
+    dist, _, _ = tf_planedistance.plane_distance(pred)
+    consistency_loss = tf.reduce_mean(dist)
+    tf.summary.scalar('losses/consistency', consistency_loss)
+    return consistency_loss
 
 
 if __name__=='__main__':

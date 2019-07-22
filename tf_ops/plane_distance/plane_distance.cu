@@ -1,20 +1,8 @@
-#define EIGEN_DEFAULT_DENSE_INDEX_TYPE int32_t
+// #define EIGEN_DEFAULT_DENSE_INDEX_TYPE int32_t
+#if GOOGLE_CUDA
+#define EIGEN_USE_GPU
 
-// #include <bits/stdc++.h>
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <vector>
-#include <string>
-#include <stdio.h>
-#include <stdlib.h>
 #include <math.h>
-#include <algorithm>
-#include <list>
-#include <unistd.h>
-
-using namespace std;
-
 #define SIGN(a, b) ((b) >= 0.0 ? fabs(a) : -fabs(a))
 #define MAX(x,y) ((x)>(y)?(x):(y))
 
@@ -36,6 +24,7 @@ __host__ __device__ static double PYTHAG(double a, double b)
 
 __host__ __device__
 int dsvd(float a[][NUM_NBRS], int m, int n, float w[3], float v[][3]){
+// int dsvd(float **a, int m, int n, float *w, float **v){
     int flag, i, its, j, jj, k, l, nm;
     double c, f, h, s, x, y, z;
     double anorm = 0.0, g = 0.0, scale = 0.0;
@@ -303,261 +292,9 @@ int dsvd(float a[][NUM_NBRS], int m, int n, float w[3], float v[][3]){
     return(1);
 }
 
-void read_clouds(float * result){
-  // File pointer 
-  fstream fin; 
-
-  // Open an existing file 
-  fin.open("clouds2.txt", ios::in); 
-
-  // Read the Data from the file 
-  // as String Vector 
-  string line, word, temp; 
-
-  int i=0;
-  while (fin >> line) { 
-    // used for breaking words 
-    stringstream s(line); 
-
-    while (getline(s, word, ',')) { 
-      float num = stof(word);
-      result[i] = num; 
-      i++;
-    } 
-  } 
-} 
-
-static void nnsearch(int b,int n,int m,const float * xyz1,const float * xyz2,float * dist,int * idx){
-    for (int i=0;i<b;i++){
-        for (int j=0;j<n;j++){
-            float x1=xyz1[(i*n+j)*3+0];
-            float y1=xyz1[(i*n+j)*3+1];
-            float z1=xyz1[(i*n+j)*3+2];
-            double best=100;
-            int besti=0;
-            for (int k=0;k<m;k++){
-                // if(k == j)  continue;
-                float x2=xyz2[(i*m+k)*3+0]-x1;
-                float y2=xyz2[(i*m+k)*3+1]-y1;
-                float z2=xyz2[(i*m+k)*3+2]-z1;
-                double d=x2*x2+y2*y2+z2*z2;
-                if (d<best){
-                    best=d;
-                    besti=k;
-                }
-            }
-            dist[i*n+j]=best;
-            idx[i*n+j]=besti;
-        }
-    }
-}
-
-static void knearestnbr(int b,int n,const float * xyz,float * dist, int *idx){
-    for (int i=0;i<b;i++){
-      int num_nbrs = 10;
-      for (int j=0;j<n;j++){
-        float x1=xyz[(i*n+j)*3+0];
-        float y1=xyz[(i*n+j)*3+1];
-        float z1=xyz[(i*n+j)*3+2];
-        // priority_queue<pair<float, int> > nn_dist;
-        // pair<float, int> max_dist;
-        float nn_dist [num_nbrs];
-        int nn_idx [num_nbrs];
-        int insert_idx = 0;
-        int max_idx = 0;
-        for (int k=0;k<n;k++){
-          if (k==j){
-            continue;
-          }
-          float x2=xyz[(i*n+k)*3+0]-x1;
-          float y2=xyz[(i*n+k)*3+1]-y1;
-          float z2=xyz[(i*n+k)*3+2]-z1;
-          double d=x2*x2+y2*y2+z2*z2;
-          if(insert_idx < num_nbrs){   // (LOOP) counter value less than queue capacity, so append
-          // if((j < num_nbrs && k <= num_nbrs) || (k < num_nbrs)){  // QUEUE
-            // nn_dist.push(make_pair(d,k));
-            // max_dist = nn_dist.top();
-            nn_dist[insert_idx] = d;
-            nn_idx[insert_idx] = k;
-            if(d > nn_dist[max_idx]){
-              max_idx = insert_idx;
-            }
-            insert_idx++;
-          }
-          else if(d < nn_dist[max_idx]){ // LOOP
-          // else if(d < max_dist.first){ // QUEUE
-            // nn_dist.pop();
-            // nn_dist.push(make_pair(d,k));
-            // max_dist = nn_dist.top();
-            if(d < nn_dist[max_idx]){
-              nn_dist[max_idx] = d;
-              nn_idx[max_idx] = k;
-              // Find new max_idx
-              max_idx = 0;
-              for(int l=1; l < num_nbrs; l++){
-                if(nn_dist[l] > nn_dist[max_idx]){
-                  max_idx = l;
-                }
-              }
-            }
-          }
-        }
-
-        // LOOP - Sort nn_idx by nn_dist
-        // Bubble sort nn_idx
-        for(int k=0; k<num_nbrs; k++){
-          for(int l=num_nbrs-1; l>k; l--){
-            if(nn_dist[l] < nn_dist[l-1]){
-              // Swap in BOTH nn_idx, nn_dist
-              int tmp = nn_idx[l-1];
-              nn_idx[l-1] = nn_idx[l];
-              nn_idx[l] = tmp;
-              float tmpd = nn_dist[l-1];
-              nn_dist[l-1] = nn_dist[l];
-              nn_dist[l] = tmpd;
-            }
-          }
-        }
-        for(int k=0; k<num_nbrs; k++){
-          idx[(i*n+j)*num_nbrs+k] = nn_idx[k];
-        }
-        // for(int k=num_nbrs-1; k>=0; k--){
-          // int l = nn_dist.top().second;
-          // nn_dist.pop();
-          // idx[(i*n+j)*num_nbrs+k] = l;
-        // }
-        // // Find best-fit plane now
-        // vector<Vector3f> points;
-        // cout << "Point " << j << "\n";
-        // while(!nn_dist.empty()){
-        //   int k = nn_dist.top().second;
-        //   nn_dist.pop();
-        //   Vector3f point;
-        //   point(0) = xyz[(i*n+k)*3+0];
-        //   point(1) = xyz[(i*n+k)*3+1];
-        //   point(2) = xyz[(i*n+k)*3+2];
-        //   std::cout << "Nbr: " << k << std::endl;
-        //   points.push_back(point);
-        // }
-        // cout << "\n";
-        // pair<Vector3f, Vector3f> plane_pair = best_plane_from_points(points);
-        // Vector3f centroid = plane_pair.first;
-        // Vector3f plane_normal = plane_pair.second;
-        // float dist_from_plane = abs((x1-centroid(0))*plane_normal(0) + (y1-centroid(1))*plane_normal(1) + (z1-centroid(2))*plane_normal(2));
-        // dist[i*n+j]=dist_from_plane;
-        // // idx[i*n+j]=besti;
-      }
-    }
-}
-
-static void simpleplanedistance(int b, int n, const float *xyz, float *dist, float *offset, float *normal){
-  const int num_nbrs = 10;
-  for (int i=0; i<b; i+=1){
-    for (int j=0; j<n; j+=1){
-      float x1=xyz[(i*n+j)*3+0];
-      float y1=xyz[(i*n+j)*3+1];
-      float z1=xyz[(i*n+j)*3+2];
-      // Queue via loop
-      float nn_dist [num_nbrs];
-      int nn_idx [num_nbrs];
-      int insert_idx = 0;
-      int max_idx = 0;
-      for (int k=0; k < n; k+=1){
-        // Compare
-        if(j == k)
-          continue;
-        float x2=xyz[(i*n+k)*3+0]-x1;
-        float y2=xyz[(i*n+k)*3+1]-y1;
-        float z2=xyz[(i*n+k)*3+2]-z1;
-        float d=x2*x2+y2*y2+z2*z2;
-        if(insert_idx < num_nbrs){
-          nn_dist[insert_idx] = d;
-          nn_idx[insert_idx] = k;
-          if(d > nn_dist[max_idx]){
-            max_idx = insert_idx;
-          }
-          insert_idx++;
-        }
-        else if(d < nn_dist[max_idx]){
-          nn_dist[max_idx] = d;
-          nn_idx[max_idx] = k;
-          // Find new max_idx
-          max_idx = 0;
-          for(int l=1; l < num_nbrs; l++){
-            if(nn_dist[l] > nn_dist[max_idx]){
-              max_idx = l;
-            }
-          }
-        }
-      }
-
-      // Store k nearest nbr indices
-      // for(int k=0; k<num_nbrs; k++){
-      //   result_i[(i*n+j)*num_nbrs+k] = nn_idx[k];
-      // }
-
-      // Init matrices to hold SVD results
-      float **a = new float *[num_nbrs];
-      for(int k=0; k<num_nbrs; k++)
-        a[k] = new float[num_nbrs];
-      float **v = new float *[3];
-      for(int k=0; k<3; k++)
-        v[k] = new float[3];
-      float w[3];
-
-      // Copy over nearest nbrs to a
-      for(int k=0; k<num_nbrs; k++)
-        for(int l=0; l<3; l++)
-          a[k][l] = xyz[(i*n+nn_idx[k])*3+l];
-
-      // calculate centroid
-      float centroidx = 0;
-      float centroidy = 0;
-      float centroidz = 0;
-      for(int k=0; k<num_nbrs; k++){
-        centroidx += a[k][0];
-        centroidy += a[k][1];
-        centroidz += a[k][2];
-      }
-      centroidx /= num_nbrs;
-      centroidy /= num_nbrs;
-      centroidz /= num_nbrs;
-
-      // subtract centroid
-      for(int k=0; k<num_nbrs; k++){
-        a[k][0] -= centroidx;
-        a[k][1] -= centroidy;
-        a[k][2] -= centroidz;
-      }
-
-      // // Calculate SVD
-      // dsvd(a, num_nbrs, 3, w, v);
-      // // Find smallest singular value
-      // int minidx = (w[0] < w[1]) ? 0 : 1 ;
-      // minidx = (w[minidx] < w[2]) ? minidx : 2 ;
-
-      // float nrm[3];
-      // nrm[0] = v[0][minidx];
-      // nrm[1] = v[1][minidx];
-      // nrm[2] = v[2][minidx];
-      // normal[(i*n+j)*3+0] = nrm[0];
-      // normal[(i*n+j)*3+1] = nrm[1];
-      // normal[(i*n+j)*3+2] = nrm[2];
-
-      // // Calculate offset
-      // float o = (x1-centroidx)*nrm[0] + (y1-centroidy)*nrm[1] + (z1-centroidz)*nrm[2];
-      // offset[i*n+j] = o;
-      // dist[i*n+j] = 0.5*o*o;
-    }
-  }
-}
-
 __global__ void PlaneDistanceKernel(int b, int n, const float *xyz, float *dist, float *offset, float *normal){
   const int batch=512;
-  // const int num_nbrs = 10;
   __shared__ float buf[batch*3];
-  if(blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0)
-    printf("Hi\t");
   for (int i=blockIdx.x;i<b;i+=gridDim.x){
     for (int j=threadIdx.x+blockIdx.y*blockDim.x;j<n;j+=blockDim.x*gridDim.y){
       float x1=xyz[(i*n+j)*3+0];
@@ -678,10 +415,10 @@ __global__ void PlaneDistanceKernel(int b, int n, const float *xyz, float *dist,
 void PlaneDistanceKernelLauncher(int b,int n,const float * xyz,float * dist,float * offset, float *normal){
     PlaneDistanceKernel<<<dim3(32,16,1),512>>>(b,n,xyz,dist,offset,normal);
 }
-__global__ void PlaneDistanceGradKernel(int b,int n,const float *dist,const float *normals,float *grad){
+__global__ void PlaneDistanceGradKernel(int b,int n,const float *offset,const float *normals,float *grad){
     for (int i=blockIdx.x;i<b;i+=gridDim.x){
       for (int j=threadIdx.x+blockIdx.y*blockDim.x;j<n;j+=blockDim.x*gridDim.y){
-        float g=dist[i*n+j];
+        float g=offset[i*n+j];
         float nx=normals[(i*n+j)*3+0];
         float ny=normals[(i*n+j)*3+1];
         float nz=normals[(i*n+j)*3+2];
@@ -691,95 +428,9 @@ __global__ void PlaneDistanceGradKernel(int b,int n,const float *dist,const floa
       }
     }
 }
-void PlaneDistanceGradKernelLauncher(int b,int n,const float *dist,const float *normals,float *grad){
+void PlaneDistanceGradKernelLauncher(int b,int n,const float *offset,const float *normals,float *grad){
     cudaMemset(grad,0,b*n*3*4);
-    PlaneDistanceGradKernel<<<dim3(1,16,1),256>>>(b,n,dist,normals,grad);
+    PlaneDistanceGradKernel<<<dim3(1,16,1),256>>>(b,n,offset,normals,grad);
 }
 
-int main(){
-  int b=32;
-  int n=4096;
-  int m=n;
-  float *xyz;
-  int *idx;
-  cudaMallocManaged(&xyz, b*n*3*sizeof(float));
-  // Read point cloud
-  read_clouds(xyz);
-
-  for(int foo=0; foo<10; foo++){
-    printf("%d:\t", foo);
-    // usleep(10000);
-    float *dist, *offset, *plane, *grad;
-    cudaError_t err = cudaMallocManaged(&dist, b*n*sizeof(float));
-    if(dist == nullptr)
-      printf("dist null %d\t", err);
-    err = cudaMallocManaged(&offset, b*n*sizeof(float));
-    if(offset == nullptr)
-      printf("offset null %d\t", err);
-    err = cudaMallocManaged(&plane, b*n*3*sizeof(float));
-    if(plane == nullptr)
-      printf("plane null %d\t", err);
-    err = cudaMallocManaged(&grad, b*n*3*sizeof(float));
-    if(grad == nullptr)
-      printf("grad null  %d\t", err);
-    printf("Malloc,%f\t", xyz[12287]);
-    // usleep(10000);
-
-    // CPU
-    // for(int i=0; i<100; i++){
-    //   knearestnbr(b, n, xyz, dist, idx);
-    // }
-    plane[12287] = 0;
-    printf("NBefore: %.6f\t", plane[12287]);
-    // simpleplanedistance(b, n, xyz, dist, offset, plane);
-    // GPU
-    PlaneDistanceKernelLauncher(b, n, xyz, dist, offset, plane);
-    cudaDeviceSynchronize();
-    printf("NAfter: %.6f\t", plane[12287]);
-    // printf("Normal: %.6f\t", plane[0]);
-    // usleep(10000);
-    PlaneDistanceGradKernelLauncher(b, n, offset, plane, grad);
-    cudaDeviceSynchronize();
-    printf("Grad: %.6f\t", grad[0]);
-    // usleep(10000);
-
-    cudaFree(dist);
-    cudaFree(offset);
-    cudaFree(plane);
-    cudaFree(grad);
-    printf("Free\n");
-    // usleep(10000);
-  }
-
-  // FILE *pfile;
-  // // pfile = fopen("ans_knearestnbr_gpu.txt","w");
-  // // for (int i=0; i < b*n; i+=1){
-  // //   for (int k=0; k < num_nbrs; k++){
-  // //     fprintf(pfile, "%d ", idx[i*num_nbrs + k]+1);
-  // //   }
-  // //   fprintf(pfile, "\n");
-  // // }
-  // // fclose(pfile);
-
-  // pfile = fopen("ans_planedist_gpu.txt","w");
-  // for (int i=0; i < b*n; i+=1){
-  //   fprintf(pfile, "%f\n", dist[i]);
-  // }
-  // fclose(pfile);
-
-  // pfile = fopen("ans_planenormals_gpu.txt","w");
-  // for (int i=0; i < b*n; i+=1){
-  //   fprintf(pfile, "%.3f %.3f %.3f\n", plane[i*3+0], plane[i*3+1], plane[i*3+2]);
-  // }
-  // fclose(pfile);
-
-  // pfile = fopen("ans_grad_gpu.txt","w");
-  // for (int i=0; i < b*n; i+=1){
-  //   fprintf(pfile, "%.5f %.5f %.5f\n", grad[i*3+0], grad[i*3+1], grad[i*3+2]);
-  // }
-  // fclose(pfile);
-
-  cudaFree(xyz);
-
-  return 0;
-}
+#endif
