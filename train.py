@@ -145,6 +145,16 @@ def get_bn_decay(batch):
     return bn_decay
 
 
+def get_consistency_loss_wt(global_step):
+    num_files = len(os.listdir("{}/train".format(data_root)))  # set manually for now
+    num_batches = old_div(num_files, BATCH_SIZE)
+    wait_epochs = 0
+    wait_steps = wait_epochs * num_batches
+    zero = lambda: 0.0
+    one = lambda: 100.0
+    return tf.cond(global_step < wait_steps, zero, one)
+
+
 def train():
     with tf.Graph().as_default():
         pointclouds_pl, labels_pl, fnames = input_pipeline("train", BATCH_SIZE)
@@ -154,8 +164,8 @@ def train():
 
             # Note the global_step=batch parameter to minimize.
             # That tells the optimizer to helpfully increment the 'batch' parameter for you every time it trains.
-            batch = tf.Variable(0)
-            bn_decay = get_bn_decay(batch)
+            global_step = tf.Variable(0)
+            bn_decay = get_bn_decay(global_step)
             tf.summary.scalar("bn_decay", bn_decay)
 
             print("--- Get model and loss")
@@ -168,15 +178,20 @@ def train():
             1. Matching distribution loss imposed between predicted and target point clouds via Chamfer or EMD
             2. Self-consistency loss for better alignment of planes imposed on prediction
             """
-            matching_loss, end_points = MODEL.get_matching_loss(pred, labels_pl, end_points)
+            matching_loss, end_points = MODEL.get_matching_loss(
+                pred, labels_pl, end_points
+            )
             # end_points["pcloss"] = tf.constant(42)
-            consistency_loss = MODEL.get_plane_consistency_loss(pred)
+            loss_wt = get_consistency_loss_wt(global_step)
+            consistency_loss = loss_wt * MODEL.get_plane_consistency_loss(pred)
+
             loss = matching_loss + consistency_loss
+            tf.summary.scalar("losses/wt", loss_wt)
             tf.summary.scalar("losses/total", loss)
 
             print("--- Get training operator")
             # Get training operator
-            learning_rate = get_learning_rate(batch)
+            learning_rate = get_learning_rate(global_step)
             tf.summary.scalar("learning_rate", learning_rate)
             if OPTIMIZER == "momentum":
                 optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=MOMENTUM)
@@ -184,16 +199,18 @@ def train():
                 optimizer = tf.train.AdamOptimizer(learning_rate)
 
             grads_and_vars = optimizer.compute_gradients(matching_loss)
-            for (grad,var) in grads_and_vars:
-                if 'upconv5/weights' in var.name:
-                    tf.summary.histogram('gradient/emd/' + var.name, grad)
+            for (grad, var) in grads_and_vars:
+                if "upconv5/weights" in var.name:
+                    tf.summary.histogram("gradient/emd/" + var.name, grad)
             grads_and_vars = optimizer.compute_gradients(consistency_loss)
-            for (grad,var) in grads_and_vars:
-                if 'upconv5/weights' in var.name:
-                    tf.summary.histogram('gradient/plane/' + var.name, grad)
+            for (grad, var) in grads_and_vars:
+                if "upconv5/weights" in var.name:
+                    tf.summary.histogram("gradient/plane/" + var.name, grad)
 
             grads_and_vars = optimizer.compute_gradients(loss)
-            train_op = optimizer.apply_gradients(grads_and_vars, global_step=batch)
+            train_op = optimizer.apply_gradients(
+                grads_and_vars, global_step=global_step
+            )
             # train_op = optimizer.minimize(loss, global_step=batch)
 
             # Add ops to save and restore all the variables.
@@ -226,7 +243,7 @@ def train():
             "loss": loss,
             "train_op": train_op,
             "merged": merged,
-            "step": batch,
+            "step": global_step,
             "fnames": fnames,
             "end_points": end_points,
         }
@@ -254,23 +271,23 @@ def train():
 def eval():
     losses = []
     lanewise_losses = {
-            "lane1": [],
-            "lane2": [],
-            "lane3": [],
-            "lane4": [],
-            "lane5": [],
-            "lane6": [],
-            "lane7": [],
-            "lane8": [],
-            "lane9": [],
-            "lane10": [],
-            "hlane1": [],
-            "hlane2": [],
-            "hlane3": [],
-            "hlane4": [],
-            }
+        "lane1": [],
+        "lane2": [],
+        "lane3": [],
+        "lane4": [],
+        "lane5": [],
+        "lane6": [],
+        "lane7": [],
+        "lane8": [],
+        "lane9": [],
+        "lane10": [],
+        "hlane1": [],
+        "hlane2": [],
+        "hlane3": [],
+        "hlane4": [],
+    }
     # for ckpt_n in range(50, 361, 50):
-    for ckpt_n in [150]:
+    for ckpt_n in [500]:
         with tf.Graph().as_default():
             pointclouds_pl, labels_pl, tf_fname = input_pipeline("test", 1)
 
@@ -286,7 +303,8 @@ def eval():
                 pred, end_points = MODEL.get_model(
                     pointclouds_pl, is_training_pl, bn_decay=bn_decay
                 )
-                loss, end_points = MODEL.get_loss(pred, labels_pl, end_points)
+                loss, end_points = MODEL.get_matching_loss(pred, labels_pl, end_points)
+                consistency_loss = MODEL.get_plane_consistency_loss(pred)
 
             # Add ops to save and restore all the variables.
             saver = tf.train.Saver(keep_checkpoint_every_n_hours=0.5)
@@ -305,20 +323,24 @@ def eval():
             # init = tf.global_variables_initializer()
             # sess.run(init, {is_training_pl:True})
 
+            total_consistency_loss = 0
             total_loss = 0
-            num_files = len(os.listdir("{}/test".format(data_root)))  # set manually for now
+            num_files = len(
+                os.listdir("{}/test".format(data_root))
+            )  # set manually for now
             # i = 0
             # while True:
             for i in tqdm(range(num_files)):
                 # try:
-                local, future, predicted, lss, fname = sess.run(
-                    [pointclouds_pl, labels_pl, pred, loss, tf_fname],
+                local, future, predicted, lss, clss, fname = sess.run(
+                    [pointclouds_pl, labels_pl, pred, loss, consistency_loss, tf_fname],
                     feed_dict={is_training_pl: False},
                 )
                 local = np.squeeze(local)
                 future = np.squeeze(future)
                 predicted = np.squeeze(predicted)
                 total_loss += lss
+                total_consistency_loss += clss
 
                 fname = fname[0].decode("utf-8")  # bytearray to string
                 fname_splits = fname[:-4].split("_")
@@ -338,19 +360,23 @@ def eval():
                     "predicted": predicted,
                     "loss": lss,
                 }
-                    # pickle.dump(data, f)
+                # pickle.dump(data, f)
                 savemat(pkl_fname[:-4] + ".mat", data)
                 # except tf.errors.OutOfRangeError:
-                    # print("Iters: {}, Total loss: {:.2f}".format(i, total_loss / i))
-                    # losses.append(total_loss / i)
-                    # break
-            print("Iters: {}, Total loss: {:.2f}".format(i, total_loss / i))
+                # print("Iters: {}, Total loss: {:.2f}".format(i, total_loss / i))
+                # losses.append(total_loss / i)
+                # break
+            print(
+                "Iters: {}, Total loss: {:.2f}, Total consistency loss: {:.2f}".format(
+                    i, total_loss/i, total_consistency_loss/i
+                )
+            )
             losses.append(total_loss / i)
     for l in losses:
         print(l)
     with open("lanewise_losses.pkl", "wb") as f:
-        lanewise_losses = { k: np.array(v) for k,v in lanewise_losses.items() }
-        pickle.dump({ "lanewise_losses": lanewise_losses }, f)
+        lanewise_losses = {k: np.array(v) for k, v in lanewise_losses.items()}
+        pickle.dump({"lanewise_losses": lanewise_losses}, f)
     ipdb.set_trace()
 
 
@@ -398,7 +424,7 @@ def train_one_epoch(sess, ops, train_writer):
         loss_sum += loss_val
         pcloss_sum += pcloss_val
 
-        if (batch_idx + 1) % 10 == 0:
+        if (batch_idx + 1) % 2 == 0:
             log_string(" -- %03d / %03d --" % (batch_idx + 1, num_batches))
             log_string("mean loss: %f" % (old_div(loss_sum, 10)))
             log_string("mean pc loss: %f" % (old_div(pcloss_sum, 10)))
@@ -450,6 +476,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 if __name__ == "__main__":
     log_string("pid: %s" % (str(os.getpid())))
-    train()
-    # eval()
+    # train()
+    eval()
     LOG_FOUT.close()

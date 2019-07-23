@@ -13,6 +13,7 @@ from tensorflow.test import compute_gradient, compute_gradient_error
 import os, sys
 import ipdb
 import time
+from scipy.io import loadmat, savemat
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 plane_distance_module=tf.load_op_library(os.path.join(BASE_DIR, 'tf_planedistance_so.so'))
@@ -33,7 +34,7 @@ output: normal: (batch_size,#points,3) plane normal
     #return [tf.TensorShape([shape1.dims[0],shape1.dims[1]]),tf.TensorShape([shape1.dims[0],shape1.dims[1]]),
         #tf.TensorShape([shape2.dims[0],shape2.dims[1]]),tf.TensorShape([shape2.dims[0],shape2.dims[1]])]
 @ops.RegisterGradient('PlaneDistance')
-def _plane_distance_grad(op, grad_dist, grad_offset, grad_normal):
+def _plane_distance_grad(op, grad_dist, grad_offset, grad_normal, grad_idx):
     offset=op.outputs[1]
     normal=op.outputs[2]
     return plane_distance_module.plane_distance_grad(offset,normal)
@@ -48,15 +49,16 @@ def read_clouds():
 
 
 if __name__=='__main__':
-    # random.seed(100)
-    # np.random.seed(100)
+    # xyz = np.random.randn(32,4096,3).astype('float32')
+    # xyz = read_clouds()
+    # xyz = loadmat("../../log_small/normalized_point_cloud_hlane1_100_160.mat")['gt']
+    xyz = loadmat('cube.mat')['dpoints'].astype(np.float32)
+    xyz = np.expand_dims(xyz, 0)
     with tf.Session() as sess:
-        xyz = np.random.randn(32,4096,3).astype('float32')
-        # xyz = read_clouds()
         inp = tf.Variable(xyz)
-        dist, offset, normal = plane_distance(inp)
-        loss = tf.reduce_sum(dist)
-        opt = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=0.05)
+        dist, offset, normal, index = plane_distance(inp)
+        loss = tf.reduce_mean(dist)
+        opt = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=1)
         grad = opt.compute_gradients(loss)#[0][0]
         train = opt.apply_gradients(grad)
         # err = compute_gradient(inp, [2,2048,3], loss, (1,), xyz)
@@ -81,12 +83,19 @@ if __name__=='__main__':
         #         for j in range(2048):
         #             print("{:.5f} {:.5f} {:.5f}".format(g[i][j][0], g[i][j][1], g[i][j][2]), file=f)
 
-        for i in range(100):
-            trainloss, _ = sess.run([loss, train])
+        for i in range(10000):
+            cloud, off, nrm, idx, trainloss, _ = sess.run([inp, offset, normal, index, loss, train])
+            cloud, off, nrm, idx = np.squeeze(cloud), np.squeeze(off), np.squeeze(nrm), np.squeeze(idx)
+            off = np.expand_dims(off, 1)
+            nrm = off*nrm
+
             newt=time.time()
             best=min(best,newt-t1)
             print(i,trainloss,old_div((newt-t0),(i+1)),best)
             t1=newt
+            # save cloud
+            savemat("viz/cloud{}.mat".format(i+1), { 'pred': cloud, 'normal': nrm, 'idx': idx+1 })
+
         #print sess.run([inp1,retb,inp2,retd])
         #grads=compute_gradient([inp1,inp2],[(16,32,3),(16,32,3)],loss,(1,),[xyz1,xyz2])
         #for i,j in grads:

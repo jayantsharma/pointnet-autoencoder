@@ -24,7 +24,7 @@ K = np.array([[fx, 0, px], [0, fy, py], [0, 0, 1]])
 
 # SfM reconstruction batch size
 TRAJECTORY_BATCH_SIZE = 230
-ROOT = "/home/jayant/monkey/grocery_data/Supermarket/data/360random"
+ROOT = "/home/jayant/monkey/grocery_data/Supermarket/data/small"
 
 
 def _parse_example(serialized_record):
@@ -128,7 +128,7 @@ def normalize():
 
 
 def write_point_clouds():
-    splits = ["train", "test"]
+    splits = ["train"]
 
     def get_tfrecord_example(feat, label, fname):
         example = tf.train.Example(
