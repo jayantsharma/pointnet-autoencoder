@@ -182,11 +182,11 @@ def train():
                 pred, labels_pl, end_points
             )
             # end_points["pcloss"] = tf.constant(42)
-            loss_wt = get_consistency_loss_wt(global_step)
-            consistency_loss = loss_wt * MODEL.get_plane_consistency_loss(pred)
+            # loss_wt = get_consistency_loss_wt(global_step)
+            # tf.summary.scalar("losses/wt", loss_wt)
+            consistency_loss = 1 * MODEL.get_plane_consistency_loss(pred)
 
-            loss = matching_loss + consistency_loss
-            tf.summary.scalar("losses/wt", loss_wt)
+            loss = matching_loss # + consistency_loss
             tf.summary.scalar("losses/total", loss)
 
             print("--- Get training operator")
@@ -197,21 +197,20 @@ def train():
                 optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=MOMENTUM)
             elif OPTIMIZER == "adam":
                 optimizer = tf.train.AdamOptimizer(learning_rate)
-
             grads_and_vars = optimizer.compute_gradients(matching_loss)
-            for (grad, var) in grads_and_vars:
-                if "upconv5/weights" in var.name:
-                    tf.summary.histogram("gradient/emd/" + var.name, grad)
             grads_and_vars = optimizer.compute_gradients(consistency_loss)
-            for (grad, var) in grads_and_vars:
-                if "upconv5/weights" in var.name:
-                    tf.summary.histogram("gradient/plane/" + var.name, grad)
 
             grads_and_vars = optimizer.compute_gradients(loss)
             train_op = optimizer.apply_gradients(
                 grads_and_vars, global_step=global_step
             )
-            # train_op = optimizer.minimize(loss, global_step=batch)
+
+            # Plot gradients wrt prediction - should be diff when loss includes plane regularization
+            G = tf.get_default_graph()
+            emd_grad = G.get_operation_by_name('gradients/MatchCost_grad/tuple/control_dependency_1').outputs[0]
+            plane_grad = G.get_operation_by_name('gradients_1/PlaneDistance_grad/PlaneDistanceGrad').outputs[0]
+            tf.summary.histogram("emd_prediction_gradient", emd_grad)
+            tf.summary.histogram("plane_prediction_gradient", plane_grad)
 
             # Add ops to save and restore all the variables.
             saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
@@ -367,7 +366,7 @@ def eval():
                 # losses.append(total_loss / i)
                 # break
             print(
-                "Iters: {}, Total loss: {:.2f}, Total consistency loss: {:.2f}".format(
+                "Iters: {}, Total loss: {:.2f}, Total consistency loss: {:.6f}".format(
                     i, total_loss/i, total_consistency_loss/i
                 )
             )

@@ -112,7 +112,7 @@ def get_matching_loss(pred, label, end_points):
 
 def get_plane_consistency_loss(pred):
     # Plane Distance
-    dist, _, _ = tf_planedistance.plane_distance(pred)
+    dist, _, _, _ = tf_planedistance.plane_distance(pred)
     consistency_loss = tf.reduce_mean(dist)
     tf.summary.scalar('losses/consistency', consistency_loss)
     return consistency_loss

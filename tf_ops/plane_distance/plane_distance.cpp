@@ -4,7 +4,8 @@ REGISTER_OP("PlaneDistance")
     .Input("xyz: float32")
     .Output("dist: float32")
     .Output("offset: float32")
-    .Output("normal: float32");
+    .Output("normal: float32")
+    .Output("idx: int32");
 REGISTER_OP("PlaneDistanceGrad")
     .Input("offset: float32")
     .Input("normal: float32")
@@ -15,7 +16,7 @@ using namespace tensorflow;
 // CPU Ops
 const int NUM_NBRS = 10;
 int dsvd(float a[][NUM_NBRS], int m, int n, float w[3], float v[][3]);
-static void calculate_plane_distance(int b,int n,const float *xyz,float *dist, float *offset, float *normal){
+static void calculate_plane_distance(int b,int n,const float *xyz,float *dist, float *offset, float *normal, int *idx){
     for (int i=0;i<b;i++){
       for (int j=0;j<n;j++){
         float x1=xyz[(i*n+j)*3+0];
@@ -56,6 +57,11 @@ static void calculate_plane_distance(int b,int n,const float *xyz,float *dist, f
               }
             }
           }
+        }
+
+        // Store k nearest nbr indices
+        for(int k=0; k<NUM_NBRS; k++){
+          idx[(i*n+j)*NUM_NBRS+k] = nn_idx[k];
         }
 
         // Init matrices to hold SVD results
@@ -151,16 +157,20 @@ class PlaneDistanceOp : public OpKernel{
             Tensor *dist_tensor=NULL;
             Tensor *offset_tensor=NULL;
             Tensor *plane_tensor=NULL;
+            Tensor *idx_tensor=NULL;
             OP_REQUIRES_OK(context,context->allocate_output(0,TensorShape{b,n},&dist_tensor));
             OP_REQUIRES_OK(context,context->allocate_output(1,TensorShape{b,n},&offset_tensor));
             OP_REQUIRES_OK(context,context->allocate_output(2,TensorShape{b,n,3},&plane_tensor));
+            OP_REQUIRES_OK(context,context->allocate_output(3,TensorShape{b,n,NUM_NBRS},&idx_tensor));
             auto dist_flat=dist_tensor->flat<float>();
             auto offset_flat=offset_tensor->flat<float>();
             auto plane_flat=plane_tensor->flat<float>();
+            auto idx_flat=idx_tensor->flat<int>();
             float * dist=&(dist_flat(0));
             float * offset=&(offset_flat(0));
             float * plane=&(plane_flat(0));
-            calculate_plane_distance(b,n,xyz,dist,offset,plane);
+            int * idx=&(idx_flat(0));
+            calculate_plane_distance(b,n,xyz,dist,offset,plane,idx);
         }
 };
 REGISTER_KERNEL_BUILDER(Name("PlaneDistance").Device(DEVICE_CPU), PlaneDistanceOp);
@@ -191,7 +201,7 @@ REGISTER_KERNEL_BUILDER(Name("PlaneDistanceGrad").Device(DEVICE_CPU), PlaneDista
 
 
 // GPU Ops
-void PlaneDistanceKernelLauncher(int b, int n, const float *xyz, float *dist, float *offset, float *normal);
+void PlaneDistanceKernelLauncher(int b, int n, const float *xyz, float *dist, float *offset, float *normal, int*idx);
 class PlaneDistanceGpuOp : public OpKernel{
     public:
         explicit PlaneDistanceGpuOp(OpKernelConstruction* context):OpKernel(context){}
@@ -207,16 +217,20 @@ class PlaneDistanceGpuOp : public OpKernel{
             Tensor *dist_tensor=NULL;
             Tensor *offset_tensor=NULL;
             Tensor *plane_tensor=NULL;
+            Tensor *idx_tensor=NULL;
             OP_REQUIRES_OK(context,context->allocate_output(0,TensorShape{b,n},&dist_tensor));
             OP_REQUIRES_OK(context,context->allocate_output(1,TensorShape{b,n},&offset_tensor));
             OP_REQUIRES_OK(context,context->allocate_output(2,TensorShape{b,n,3},&plane_tensor));
+            OP_REQUIRES_OK(context,context->allocate_output(3,TensorShape{b,n,NUM_NBRS},&idx_tensor));
             auto dist_flat=dist_tensor->flat<float>();
             auto offset_flat=offset_tensor->flat<float>();
             auto plane_flat=plane_tensor->flat<float>();
+            auto idx_flat=idx_tensor->flat<int>();
             float * dist=&(dist_flat(0));
             float * offset=&(offset_flat(0));
             float * plane=&(plane_flat(0));
-            PlaneDistanceKernelLauncher(b,n,xyz,dist,offset,plane);
+            int * idx=&(idx_flat(0));
+            PlaneDistanceKernelLauncher(b,n,xyz,dist,offset,plane,idx);
         }
 };
 REGISTER_KERNEL_BUILDER(Name("PlaneDistance").Device(DEVICE_GPU), PlaneDistanceGpuOp);

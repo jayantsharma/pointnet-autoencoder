@@ -292,7 +292,7 @@ int dsvd(float a[][NUM_NBRS], int m, int n, float w[3], float v[][3]){
     return(1);
 }
 
-__global__ void PlaneDistanceKernel(int b, int n, const float *xyz, float *dist, float *offset, float *normal){
+__global__ void PlaneDistanceKernel(int b, int n, const float *xyz, float *dist, float *offset, float *normal, int *idx){
   const int batch=512;
   __shared__ float buf[batch*3];
   for (int i=blockIdx.x;i<b;i+=gridDim.x){
@@ -344,9 +344,9 @@ __global__ void PlaneDistanceKernel(int b, int n, const float *xyz, float *dist,
       }
 
       // Store k nearest nbr indices
-      // for(int k=0; k<NUM_NBRS; k++){
-      //   result_i[(i*n+j)*NUM_NBRS+k] = nn_idx[k];
-      // }
+      for(int k=0; k<NUM_NBRS; k++){
+        idx[(i*n+j)*NUM_NBRS+k] = nn_idx[k];
+      }
 
       // Init matrices to hold SVD results
       // float **a = new float *[NUM_NBRS];
@@ -412,8 +412,8 @@ __global__ void PlaneDistanceKernel(int b, int n, const float *xyz, float *dist,
     }
   }
 }
-void PlaneDistanceKernelLauncher(int b,int n,const float * xyz,float * dist,float * offset, float *normal){
-    PlaneDistanceKernel<<<dim3(32,16,1),512>>>(b,n,xyz,dist,offset,normal);
+void PlaneDistanceKernelLauncher(int b,int n,const float * xyz,float * dist,float * offset, float *normal, int *idx){
+    PlaneDistanceKernel<<<dim3(32,16,1),512>>>(b,n,xyz,dist,offset,normal,idx);
 }
 __global__ void PlaneDistanceGradKernel(int b,int n,const float *offset,const float *normals,float *grad){
     for (int i=blockIdx.x;i<b;i+=gridDim.x){
