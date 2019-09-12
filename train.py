@@ -17,6 +17,7 @@ import ipdb
 import pickle
 from scipy.io import savemat
 from tqdm import tqdm
+from glob import glob
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
@@ -25,7 +26,7 @@ sys.path.append(os.path.join(ROOT_DIR, "models"))
 sys.path.append(os.path.join(ROOT_DIR, "utils"))
 sys.path.append(os.path.join(ROOT_DIR, "data_prep"))
 import part_dataset
-import show3d_balls
+# import show3d_balls
 from input_pipeline import input_pipeline
 from input_pipeline import ROOT as data_root
 
@@ -207,13 +208,14 @@ def train():
 
             # Plot gradients wrt prediction - should be diff when loss includes plane regularization
             G = tf.get_default_graph()
-            emd_grad = G.get_operation_by_name('gradients/MatchCost_grad/tuple/control_dependency_1').outputs[0]
+            # emd_grad = G.get_operation_by_name('gradients/MatchCost_grad/tuple/control_dependency_1').outputs[0]
             plane_grad = G.get_operation_by_name('gradients_1/PlaneDistance_grad/PlaneDistanceGrad').outputs[0]
-            tf.summary.histogram("emd_prediction_gradient", emd_grad)
+            # tf.summary.histogram("emd_prediction_gradient", emd_grad)
             tf.summary.histogram("plane_prediction_gradient", plane_grad)
 
             # Add ops to save and restore all the variables.
-            saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
+            saver = tf.train.Saver()
+            # saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
 
         # Create a session
         config = tf.ConfigProto()
@@ -230,9 +232,11 @@ def train():
         ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
         if ckpt_path:
             saver.restore(sess, ckpt_path)
+            start_epoch = int(ckpt_path.split('-')[-1]) + 1
         else:
             init = tf.global_variables_initializer()
             sess.run(init)
+            start_epoch = 1
 
         ops = {
             "pointclouds_pl": pointclouds_pl,
@@ -247,8 +251,7 @@ def train():
             "end_points": end_points,
         }
 
-        best_loss = 1e20
-        for epoch in range(1, MAX_EPOCH + 1):
+        for epoch in range(start_epoch, MAX_EPOCH + 1):
             log_string("**** EPOCH %03d ****" % (epoch))
             sys.stdout.flush()
 
@@ -267,116 +270,80 @@ def train():
                 log_string("Model saved in file: %s" % save_path)
 
 
+def get_num_files(split):
+    # num_files = len(os.listdir("{}/{}".format(data_root, split)))
+    num_files = len(glob("{}/*.mat".format(data_root)))
+    num_files *= 0.8 if split == 'train' else 0.2
+    return int(num_files)
+
+
 def eval():
-    losses = []
-    lanewise_losses = {
-        "lane1": [],
-        "lane2": [],
-        "lane3": [],
-        "lane4": [],
-        "lane5": [],
-        "lane6": [],
-        "lane7": [],
-        "lane8": [],
-        "lane9": [],
-        "lane10": [],
-        "hlane1": [],
-        "hlane2": [],
-        "hlane3": [],
-        "hlane4": [],
-    }
-    # for ckpt_n in range(50, 361, 50):
-    for ckpt_n in [500]:
-        with tf.Graph().as_default():
-            pointclouds_pl, labels_pl, tf_fname = input_pipeline("test", 1)
+    with tf.Graph().as_default():
+        pointclouds_pl, labels_pl, nums = input_pipeline('train', 1)
 
-            with tf.device("/gpu:" + str(GPU_INDEX)):
-                is_training_pl = tf.placeholder(tf.bool, shape=())
+        with tf.device("/gpu:" + str(GPU_INDEX)):
+            is_training_pl = tf.placeholder(tf.bool, shape=())
 
-                # Note the global_step=batch parameter to minimize.
-                # That tells the optimizer to helpfully increment the 'batch' parameter for you every time it trains.
-                batch = tf.Variable(0)
-                bn_decay = get_bn_decay(batch)
+            # Note the global_step=batch parameter to minimize.
+            # That tells the optimizer to helpfully increment the 'batch' parameter for you every time it trains.
+            batch = tf.Variable(0)
+            bn_decay = get_bn_decay(batch)
 
-                # # Get model and loss
-                pred, end_points = MODEL.get_model(
-                    pointclouds_pl, is_training_pl, bn_decay=bn_decay
-                )
-                loss, end_points = MODEL.get_matching_loss(pred, labels_pl, end_points)
-                consistency_loss = MODEL.get_plane_consistency_loss(pred)
-
-            # Add ops to save and restore all the variables.
-            saver = tf.train.Saver(keep_checkpoint_every_n_hours=0.5)
-
-            # Create a session
-            config = tf.ConfigProto()
-            config.gpu_options.allow_growth = True
-            config.allow_soft_placement = True
-            sess = tf.Session(config=config)
-
-            # Init variables
-            ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
-            ckpt_path = "%s/model.ckpt-%d" % (LOG_DIR, ckpt_n)
-            print(ckpt_path)
-            saver.restore(sess, ckpt_path)
-            # init = tf.global_variables_initializer()
-            # sess.run(init, {is_training_pl:True})
-
-            total_consistency_loss = 0
-            total_loss = 0
-            num_files = len(
-                os.listdir("{}/test".format(data_root))
-            )  # set manually for now
-            # i = 0
-            # while True:
-            for i in tqdm(range(num_files)):
-                # try:
-                local, future, predicted, lss, clss, fname = sess.run(
-                    [pointclouds_pl, labels_pl, pred, loss, consistency_loss, tf_fname],
-                    feed_dict={is_training_pl: False},
-                )
-                local = np.squeeze(local)
-                future = np.squeeze(future)
-                predicted = np.squeeze(predicted)
-                total_loss += lss
-                total_consistency_loss += clss
-
-                fname = fname[0].decode("utf-8")  # bytearray to string
-                fname_splits = fname[:-4].split("_")
-                lane, waypt = fname_splits[3:5]
-                waypt = int(waypt)
-                ref = 1 if len(fname_splits) == 5 else int(fname_splits[5])
-                # lanewise_losses[lane][ref-1][waypt-1] = lss
-                lanewise_losses[lane].append(lss)
-
-                # Bookkeeping
-                i += 1
-                pkl_fname = "{}/{}.pkl".format(LOG_DIR, fname[:-4])
-                # with open(pkl_fname, "wb") as f:
-                data = {
-                    "local": local,
-                    "gt": future,
-                    "predicted": predicted,
-                    "loss": lss,
-                }
-                # pickle.dump(data, f)
-                savemat(pkl_fname[:-4] + ".mat", data)
-                # except tf.errors.OutOfRangeError:
-                # print("Iters: {}, Total loss: {:.2f}".format(i, total_loss / i))
-                # losses.append(total_loss / i)
-                # break
-            print(
-                "Iters: {}, Total loss: {:.2f}, Total consistency loss: {:.6f}".format(
-                    i, total_loss/i, total_consistency_loss/i
-                )
+            # # Get model and loss
+            pred, end_points = MODEL.get_model(
+                pointclouds_pl, is_training_pl, bn_decay=bn_decay
             )
-            losses.append(total_loss / i)
-    for l in losses:
-        print(l)
-    with open("lanewise_losses.pkl", "wb") as f:
-        lanewise_losses = {k: np.array(v) for k, v in lanewise_losses.items()}
-        pickle.dump({"lanewise_losses": lanewise_losses}, f)
-    ipdb.set_trace()
+            loss, end_points = MODEL.get_matching_loss(pred, labels_pl, end_points)
+            consistency_loss = MODEL.get_plane_consistency_loss(pred)
+
+        # Add ops to save and restore all the variables.
+        saver = tf.train.Saver(keep_checkpoint_every_n_hours=0.5)
+
+        # Create a session
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        config.allow_soft_placement = True
+        sess = tf.Session(config=config)
+
+        # Init variables
+        ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
+        print(ckpt_path)
+        saver.restore(sess, ckpt_path)
+        # init = tf.global_variables_initializer()
+        # sess.run(init, {is_training_pl:True})
+
+        total_consistency_loss = 0
+        total_loss = 0
+        num_files = get_num_files('train')
+        # i = 0
+        # while True:
+        for i in tqdm(range(num_files)):
+            # try:
+            local, future, predicted, lss, clss, ns = sess.run(
+                [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums],
+                feed_dict={is_training_pl: False},
+            )
+            local = np.squeeze(local)
+            future = np.squeeze(future)
+            predicted = np.squeeze(predicted)
+            n = ns[0][0]
+            total_loss += lss
+            total_consistency_loss += clss
+
+            # Bookkeeping
+            i += 1
+            data = {
+                "local": local,
+                "gt": future,
+                "predicted": predicted,
+                "loss": lss,
+            }
+            # savemat("{}/{}.mat".format(LOG_DIR, n), data)
+        print(
+            "Iters: {}, Total loss: {:.6f}, Total consistency loss: {:.6f}".format(
+                i, total_loss/i, total_consistency_loss/i
+            )
+        )
 
 
 def get_batch(dataset, idxs, start_idx, end_idx):
@@ -395,7 +362,7 @@ def train_one_epoch(sess, ops, train_writer):
     is_training = True
 
     # Shuffle train samples
-    num_files = len(os.listdir("{}/train".format(data_root)))  # set manually for now
+    num_files = get_num_files('train')      # set manually for now
     num_batches = old_div(num_files, BATCH_SIZE)
 
     loss_sum = 0
@@ -423,7 +390,7 @@ def train_one_epoch(sess, ops, train_writer):
         loss_sum += loss_val
         pcloss_sum += pcloss_val
 
-        if (batch_idx + 1) % 2 == 0:
+        if (batch_idx + 1) % 10 == 0:
             log_string(" -- %03d / %03d --" % (batch_idx + 1, num_batches))
             log_string("mean loss: %f" % (old_div(loss_sum, 10)))
             log_string("mean pc loss: %f" % (old_div(pcloss_sum, 10)))

@@ -15,8 +15,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 import tf_util
-# sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/nn_distance'))
-# import tf_nndistance
+sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/nn_distance'))
+import tf_nndistance
 sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/approxmatch'))
 import tf_approxmatch
 sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/plane_distance'))
@@ -79,12 +79,12 @@ def get_model(point_cloud, is_training, bn_decay=None):
 
     # UPCONV Decoder
     net = tf.reshape(net, [-1, 1, 1, 1024])
-    net = tf_util.conv2d_transpose(net, 512, kernel_size=[2,2], stride=[1,1], padding='VALID', scope='upconvn', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 256, kernel_size=[2,2], stride=[2,2], padding='VALID', scope='upconv1', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 256, kernel_size=[3,3], stride=[1,1], padding='VALID', scope='upconv2', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 128, kernel_size=[5,5], stride=[3,3], padding='VALID', scope='upconv3', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 128, kernel_size=[7,7], stride=[3,3], padding='VALID', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 512, kernel_size=[2,2], stride=[1,1], padding='VALID', scope='upconv1', bn=True, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 256, kernel_size=[3,3], stride=[2,2], padding='VALID', scope='upconv2', bn=True, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 128, kernel_size=[3,3], stride=[2,2], padding='VALID', scope='upconv3', bn=True, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 64, kernel_size=[4,5], stride=[2,3], padding='VALID', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 3, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv5', activation_fn=None)
+    net = net[:,:,:32,:]
     end_points['xyzmap'] = net
     net = tf.reshape(net, [batch_size, -1, 3], name='prediction')
     print("Output: {}".format(net.shape))
@@ -96,18 +96,20 @@ def get_matching_loss(pred, label, end_points):
     """ pred: BxNx3,
         label: BxNx3,
     """
-    # # NN distance
-    # dists_forward,_,dists_backward,_ = tf_nndistance.nn_distance(pred, label)
-    # loss = tf.reduce_mean(dists_forward+dists_backward)
-    # end_points['pcloss'] = loss
-    # return loss*100, end_points
+    # NN distance
+    dists_forward,_,dists_backward,_ = tf_nndistance.nn_distance(pred, label)
+    loss = tf.reduce_mean(dists_forward+dists_backward)
+    end_points['pcloss'] = loss
+    loss *= 100
+    tf.summary.scalar('losses/chamfer', loss)
+    return loss, end_points
 
-    # EMD
-    match = tf_approxmatch.approx_match(label, pred)
-    matching_loss = tf.reduce_mean(tf_approxmatch.match_cost(label, pred, match))
-    tf.summary.scalar('losses/matching', matching_loss)
-    end_points['pcloss'] = matching_loss
-    return matching_loss, end_points
+    # # EMD
+    # match = tf_approxmatch.approx_match(label, pred)
+    # matching_loss = tf.reduce_mean(tf_approxmatch.match_cost(label, pred, match))
+    # tf.summary.scalar('losses/matching', matching_loss)
+    # end_points['pcloss'] = matching_loss
+    # return matching_loss, end_points
 
 
 def get_plane_consistency_loss(pred):

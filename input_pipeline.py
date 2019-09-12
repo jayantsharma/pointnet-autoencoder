@@ -9,10 +9,11 @@ from scipy.io import loadmat, savemat
 from skimage.io import imread, imshow, imsave
 from skimage.util import pad
 from skimage.transform import rescale
+from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from scipy.ndimage.filters import gaussian_filter
 import tensorflow as tf
-from random import randint
+from random import randint, sample
 
 
 # Intrinsics
@@ -22,9 +23,7 @@ px = 636.20736
 py = 349.37424
 K = np.array([[fx, 0, px], [0, fy, py], [0, 0, 1]])
 
-# SfM reconstruction batch size
-TRAJECTORY_BATCH_SIZE = 230
-ROOT = "/home/jayant/monkey/grocery_data/Supermarket/data/small"
+ROOT = "/home/jayant/monkey/MANO/50ksamples"
 
 
 def _parse_example(serialized_record):
@@ -33,19 +32,19 @@ def _parse_example(serialized_record):
         features={
             "feat": tf.FixedLenFeature([], tf.string),
             "label": tf.FixedLenFeature([], tf.string),
-            "fname": tf.FixedLenFeature([], tf.string),
+            "num": tf.FixedLenFeature([], tf.string),
         },
         name="features",
     )
 
     feat = tf.decode_raw(example["feat"], tf.float64)
     label = tf.decode_raw(example["label"], tf.float64)
-    fname_bytes = example["fname"]
+    num = tf.decode_raw(example["num"], tf.int64)
 
-    feat = tf.cast(tf.reshape(feat, (4096, 6)), tf.float32)
-    label = tf.cast(tf.reshape(label, (2048, 6)), tf.float32)
+    feat = tf.cast(tf.reshape(feat, (553,3)), tf.float32)
+    label = tf.cast(tf.reshape(label, (768,3)), tf.float32)
 
-    return feat, label, fname_bytes
+    return feat, label, num
 
 
 def preprocess(feat, label, fname_bytes):
@@ -71,38 +70,56 @@ def input_pipeline(split, batch_size):
         dataset = dataset.repeat()
         dataset = dataset.shuffle(buffer_size=5000)
     dataset = dataset.map(_parse_example, num_parallel_calls=2)
-    dataset = dataset.map(preprocess, num_parallel_calls=2)
+    # dataset = dataset.map(preprocess, num_parallel_calls=2)
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(buffer_size=batch_size)
     iterator = dataset.make_one_shot_iterator()
-    feat, label, fname_bytes = iterator.get_next()
+    feat, label, num = iterator.get_next()
 
     # Set shapes - makes life easy
-    feat.set_shape([batch_size, 4096, 6])
-    label.set_shape([batch_size, 4096, 3])
+    feat.set_shape([batch_size, 553, 3])
+    label.set_shape([batch_size, 768, 3])
 
-    return feat, label, fname_bytes
+    return feat, label, num
 
 
 def test_pipeline():
-    ftrs, lbls, fname_bytes = input_pipeline("train", 1)
+    ftrs, lbls, nums = input_pipeline("train", 1)
     with tf.Session() as sess:
-        f, l, fb = sess.run([ftrs, lbls, fname_bytes])
+        f, l, n = sess.run([ftrs, lbls, nums])
         f = np.squeeze(f)
         l = np.squeeze(l)
-        fname = fb[0].decode("utf-8")  # bytearray to string
+        n = n[0][0]
 
-        print(f.shape, np.linalg.norm(f[:, :3], axis=1).max())
-        print(
-            l.shape,
-            np.linalg.norm(l[:, :3], axis=1).min(),
-            np.linalg.norm(l[:, :3], axis=1).max(),
-        )
-        print(fname)
+        print(n, f.shape, l.shape)
 
-        savemat("foo.mat", {"pts_local": f, "pts_global": l, "fname": fname})
+        savemat("foo.mat", {"feat": f, "label": l, "num": n})
         ipdb.set_trace()
         print('DONE')
+
+
+def get_train_test_lists():
+    _, _, nums = input_pipeline("train", 1)
+    with open("train.list","w") as f:
+        with tf.Session() as sess:
+            while True:
+                try:
+                    n = sess.run(nums)
+                    n = n[0][0]
+                    print('{:d}'.format(n), file=f)
+                except tf.errors.OutOfRangeError:
+                    break
+
+    _, _, nums = input_pipeline("test", 1)
+    with open("test.list","w") as f:
+        with tf.Session() as sess:
+            while True:
+                try:
+                    n = sess.run(nums)
+                    n = n[0][0]
+                    print('{:d}'.format(n), file=f)
+                except tf.errors.OutOfRangeError:
+                    break
 
 
 def normalize():
@@ -128,9 +145,21 @@ def normalize():
 
 
 def write_point_clouds():
-    splits = ["train"]
+    splits = ["train", "test"]
+    """
+    Total 3000 hands
+    Split into train/test using sklearn train_test_split fn
+    """
+    num_samples = 50000
+    train_idxs, test_idxs = train_test_split(range(1, num_samples+1), test_size=0.2)
+    idxs = { 'train': train_idxs, 'test': test_idxs }
+    # idxs = { 'train': range(1,101) }
 
-    def get_tfrecord_example(feat, label, fname):
+    # Point index (1-based) of middle 2 fingers
+    l = 357
+    u = 581
+
+    def get_tfrecord_example(feat, label, n):
         example = tf.train.Example(
             features=tf.train.Features(
                 feature={
@@ -140,8 +169,8 @@ def write_point_clouds():
                     "label": tf.train.Feature(
                         bytes_list=tf.train.BytesList(value=[label.tobytes()])
                     ),
-                    "fname": tf.train.Feature(
-                        bytes_list=tf.train.BytesList(value=[fname.encode("utf-8")])
+                    "num": tf.train.Feature(
+                        bytes_list=tf.train.BytesList(value=[np.array([n]).tobytes()])
                     ),
                 }
             )
@@ -150,13 +179,16 @@ def write_point_clouds():
 
     for split in splits:
         writer = tf.python_io.TFRecordWriter(os.path.join(ROOT, split + ".tfrecord"))
-        data_dir = os.path.join(ROOT, split)
-        hash_list = glob("{}/normalized_point_cloud*mat".format(data_dir))
-        print("{}: {}".format(split.upper(), len(hash_list)))
-        for s in tqdm(hash_list):
+        data_dir = os.path.join(ROOT) # , split)
+        for idx in tqdm(idxs[split]):
+            s = "{}/{}.mat".format(data_dir, idx)
             data = loadmat(s)
-            feat, label = data["pts_local"], data["pts_global"]
-            example = get_tfrecord_example(feat, label, s.split("/")[-1])
+            points = data['v']
+            num_points = points.shape[1]
+            wofinger = np.arange(num_points)
+            wofinger = (wofinger < l-1) | (wofinger >= u)
+            feat, label = points[:,wofinger], points[:,sample(range(num_points), 768)]
+            example = get_tfrecord_example(feat.T, label.T, idx)
             writer.write(example)
         writer.close()
 
@@ -200,3 +232,6 @@ if __name__ == "__main__":
     # STEP 3
     write_point_clouds()
     test_pipeline()
+
+    # STEP 4 - Replicate train-test split
+    # get_train_test_lists()
