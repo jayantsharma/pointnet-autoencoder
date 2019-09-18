@@ -15,6 +15,10 @@ from scipy.ndimage.filters import gaussian_filter
 import tensorflow as tf
 from random import randint, sample
 
+# Graph Conv imports
+sys.path.append("/home/jayant/gcn")
+from gcn.utils import *
+
 
 # Intrinsics
 fx = 658.77248
@@ -30,21 +34,24 @@ def _parse_example(serialized_record):
     example = tf.parse_single_example(
         serialized_record,
         features={
-            "feat": tf.FixedLenFeature([], tf.string),
-            "label": tf.FixedLenFeature([], tf.string),
+            "partial": tf.FixedLenFeature([], tf.string),
+            "complete": tf.FixedLenFeature([], tf.string),
+            "features": tf.FixedLenFeature([], tf.string),
             "num": tf.FixedLenFeature([], tf.string),
         },
         name="features",
     )
 
-    feat = tf.decode_raw(example["feat"], tf.float64)
-    label = tf.decode_raw(example["label"], tf.float64)
+    partial = tf.decode_raw(example["partial"], tf.float64)
+    complete = tf.decode_raw(example["complete"], tf.float64)
+    features = tf.decode_raw(example["features"], tf.float64)
     num = tf.decode_raw(example["num"], tf.int64)
 
-    feat = tf.cast(tf.reshape(feat, (553,3)), tf.float32)
-    label = tf.cast(tf.reshape(label, (768,3)), tf.float32)
+    partial = tf.cast(tf.reshape(partial, (553,3)), tf.float32)
+    complete = tf.cast(tf.reshape(complete, (768,3)), tf.float32)
+    features = tf.cast(tf.reshape(features, (768,3)), tf.float32)
 
-    return feat, label, num
+    return partial, complete, features, num
 
 
 def preprocess(feat, label, fname_bytes):
@@ -67,6 +74,7 @@ def input_pipeline(split, batch_size):
     files = tf.data.Dataset.list_files(os.path.join(ROOT, split + ".tfrecord"))
     dataset = tf.data.TFRecordDataset(files)
     if split == "train":
+        # pass
         dataset = dataset.repeat()
         dataset = dataset.shuffle(buffer_size=5000)
     dataset = dataset.map(_parse_example, num_parallel_calls=2)
@@ -74,26 +82,28 @@ def input_pipeline(split, batch_size):
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(buffer_size=batch_size)
     iterator = dataset.make_one_shot_iterator()
-    feat, label, num = iterator.get_next()
+    prtl, cmplt, ftrs, nums = iterator.get_next()
 
     # Set shapes - makes life easy
-    feat.set_shape([batch_size, 553, 3])
-    label.set_shape([batch_size, 768, 3])
+    prtl.set_shape([batch_size, 553, 3])
+    cmplt.set_shape([batch_size, 768, 3])
+    ftrs.set_shape([batch_size, 768, 3])
 
-    return feat, label, num
+    return prtl, cmplt, ftrs, nums
 
 
 def test_pipeline():
-    ftrs, lbls, nums = input_pipeline("train", 1)
+    prtl, cmplt, ftrs, nums = input_pipeline("train", 1)
     with tf.Session() as sess:
-        f, l, n = sess.run([ftrs, lbls, nums])
+        p, c, f, n = sess.run([prtl, cmplt, ftrs, nums])
+        p = np.squeeze(p)
+        c = np.squeeze(c)
         f = np.squeeze(f)
-        l = np.squeeze(l)
         n = n[0][0]
 
-        print(n, f.shape, l.shape)
+        print(n, p.shape, c.shape, f.shape)
 
-        savemat("foo.mat", {"feat": f, "label": l, "num": n})
+        # savemat("foo.mat", {"feat": f, "label": l, "num": n})
         ipdb.set_trace()
         print('DONE')
 
@@ -145,29 +155,25 @@ def normalize():
 
 
 def write_point_clouds():
-    splits = ["train", "test"]
-    """
-    Total 3000 hands
-    Split into train/test using sklearn train_test_split fn
-    """
-    num_samples = 50000
-    train_idxs, test_idxs = train_test_split(range(1, num_samples+1), test_size=0.2)
-    idxs = { 'train': train_idxs, 'test': test_idxs }
-    # idxs = { 'train': range(1,101) }
+    splits = ["train", "test"]      # Read splits from files like train.list, test.list
 
     # Point index (1-based) of middle 2 fingers
     l = 357
     u = 581
+    num_pred = 768
 
-    def get_tfrecord_example(feat, label, n):
+    def get_tfrecord_example(partial, complete, features, n):
         example = tf.train.Example(
             features=tf.train.Features(
                 feature={
-                    "feat": tf.train.Feature(
-                        bytes_list=tf.train.BytesList(value=[feat.tobytes()])
+                    "partial": tf.train.Feature(
+                        bytes_list=tf.train.BytesList(value=[partial.tobytes()])
                     ),
-                    "label": tf.train.Feature(
-                        bytes_list=tf.train.BytesList(value=[label.tobytes()])
+                    "complete": tf.train.Feature(
+                        bytes_list=tf.train.BytesList(value=[complete.tobytes()])
+                    ),
+                    "features": tf.train.Feature(
+                        bytes_list=tf.train.BytesList(value=[features.tobytes()])
                     ),
                     "num": tf.train.Feature(
                         bytes_list=tf.train.BytesList(value=[np.array([n]).tobytes()])
@@ -179,16 +185,22 @@ def write_point_clouds():
 
     for split in splits:
         writer = tf.python_io.TFRecordWriter(os.path.join(ROOT, split + ".tfrecord"))
-        data_dir = os.path.join(ROOT) # , split)
-        for idx in tqdm(idxs[split]):
-            s = "{}/{}.mat".format(data_dir, idx)
-            data = loadmat(s)
-            points = data['v']
+        with open('%s.list' % split) as f:
+            idxs = f.read().splitlines()
+        for idx in tqdm(idxs):
+            s = "{}/{}.pkl".format(ROOT, idx)
+            with open(s, 'rb') as f:
+                data = pickle.load(f)
+            points, edges = data['V'], data['E']
             num_points = points.shape[1]
             wofinger = np.arange(num_points)
             wofinger = (wofinger < l-1) | (wofinger >= u)
-            feat, label = points[:,wofinger], points[:,sample(range(num_points), 768)]
-            example = get_tfrecord_example(feat.T, label.T, idx)
+            partial = points[:,wofinger].T
+            complete = points[:,:num_pred].T
+
+            # Preprocessing for Graph Conv Network
+            features = preprocess_features(complete)
+            example = get_tfrecord_example(partial, complete, features, int(idx))
             writer.write(example)
         writer.close()
 
@@ -223,15 +235,5 @@ def distribute_point_clouds():
 
 
 if __name__ == "__main__":
-    # STEP 1
-    # normalize()
-
-    # STEP 2
-    # distribute_point_clouds()
-
-    # STEP 3
     write_point_clouds()
     test_pipeline()
-
-    # STEP 4 - Replicate train-test split
-    # get_train_test_lists()

@@ -18,6 +18,7 @@ import pickle
 from scipy.io import savemat
 from tqdm import tqdm
 from glob import glob
+from collections import defaultdict
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
@@ -26,41 +27,91 @@ sys.path.append(os.path.join(ROOT_DIR, "models"))
 sys.path.append(os.path.join(ROOT_DIR, "utils"))
 sys.path.append(os.path.join(ROOT_DIR, "data_prep"))
 import part_dataset
+
 # import show3d_balls
 from input_pipeline import input_pipeline
 from input_pipeline import ROOT as data_root
 
+# Graph Conv imports
+sys.path.append(os.path.join(ROOT_DIR, "/home/jayant/gcn"))
+from gcn.utils import *
+from gcn.models import GCN, MLP
+
 parser = argparse.ArgumentParser()
-parser.add_argument("--gpu", type=int, default=0, help="GPU to use [default: GPU 0]")
-parser.add_argument("--model", default="model", help="Model name [default: model]")
 parser.add_argument(
-    "--category", default=None, help="Which single class to train on [default: None]"
-)
-parser.add_argument("--log_dir", default="log", help="Log dir [default: log]")
+        "--gpu", 
+        type=int, 
+        default=0, 
+        help="GPU to use [default: GPU 0]"
+        )
 parser.add_argument(
-    "--num_point", type=int, default=2048, help="Point Number [default: 2048]"
-)
+        "--model", 
+        default="model", 
+        help="Model name [default: model]"
+        )
 parser.add_argument(
-    "--max_epoch", type=int, default=201, help="Epoch to run [default: 201]"
-)
+    "--category", 
+    default=None, 
+    help="Which single class to train on [default: None]"
+    )
 parser.add_argument(
-    "--batch_size",
+        "--log_dir", 
+        default="log", 
+        help="Log dir [default: log]"
+        )
+parser.add_argument(
+        "--num_point", 
+        type=int, 
+        default=2048, 
+        help="Point Number [default: 2048]"
+        )
+parser.add_argument(
+        "--max_epoch", 
+        type=int, 
+        default=201, 
+        help="Epoch to run [default: 201]"
+        )
+parser.add_argument(
+        "--batch_size", 
+        type=int, 
+        default=1, 
+        help="Batch Size during training [default: 32]"
+        )
+parser.add_argument(
+    "--weight_decay",
+    type=float,
+    default=5e-4,
+    help="Weight for L2 loss on embedding matrix.",
+    )
+parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.5,
+        help='Dropout rate (1 - keep probability).'
+        )
+parser.add_argument(
+    "--early_stopping",
     type=int,
-    default=32,
-    help="Batch Size during training [default: 32]",
-)
+    default=10,
+    help="Tolerance for early stopping (# of epochs).",
+    )
+parser.add_argument(
+        "--momentum", 
+        type=float, 
+        default=0.9, 
+        help="Initial learning rate [default: 0.9]"
+        )
+parser.add_argument(
+        "--optimizer", 
+        default="adam", 
+        help="adam or momentum [default: adam]"
+        )
 parser.add_argument(
     "--learning_rate",
     type=float,
     default=0.001,
     help="Initial learning rate [default: 0.001]",
-)
-parser.add_argument(
-    "--momentum", type=float, default=0.9, help="Initial learning rate [default: 0.9]"
-)
-parser.add_argument(
-    "--optimizer", default="adam", help="adam or momentum [default: adam]"
-)
+    )
 parser.add_argument(
     "--decay_step",
     type=int,
@@ -156,11 +207,29 @@ def get_consistency_loss_wt(global_step):
     return tf.cond(global_step < wait_steps, zero, one)
 
 
+def construct_feed_dict(features, support, placeholders):
+    """Construct feed dictionary."""
+    feed_dict = dict()
+    feed_dict.update({placeholders["features"]: features})
+    feed_dict.update(
+        {placeholders["support"][i]: support[i] for i in range(len(support))}
+    )
+    return feed_dict
+
+
 def train():
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, fnames = input_pipeline("train", BATCH_SIZE)
+        num_partial = 553
+        num_pred = 768
+        partial_cloud, complete_cloud, adj, fnames = input_pipeline("train", BATCH_SIZE)
+        with open("%s/adjacency.pkl" % data_root, "rb") as f:
+            data = pickle.load(f)
+            adj = data["adj"]
+            supp = data["support"]
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
+            partial_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE,num_partial,3))
+            complete_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE,num_pred,3))
             is_training_pl = tf.placeholder(tf.bool, shape=())
 
             # Note the global_step=batch parameter to minimize.
@@ -169,53 +238,97 @@ def train():
             bn_decay = get_bn_decay(global_step)
             tf.summary.scalar("bn_decay", bn_decay)
 
-            print("--- Get model and loss")
-            # Get model and loss
-            pred, end_points = MODEL.get_model(
-                pointclouds_pl, is_training_pl, bn_decay=bn_decay
+            # Predict point cloud
+            with tf.variable_scope("generator"):
+                pred, end_points = MODEL.get_model(
+                    partial_pl, is_training_pl, bn_decay=bn_decay
+                )
+            # Construct proxy mesh using NN matching
+            matching_loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(
+                pred, complete_pl, end_points
+            )
+            chamfer_sum = tf.summary.scalar("losses/chamfer", matching_loss)
+
+            # Define GCN placeholders
+            real_features = tf.placeholder(tf.float32, shape=(num_pred, 3))
+            fake_features = tf.placeholder(tf.float32, shape=(num_pred, 3))
+            real_support = [tf.sparse_placeholder(tf.float32)]
+            fake_support = [tf.sparse_placeholder(tf.float32)]
+            dropout = tf.placeholder_with_default(0.0, shape=())
+            # GCN
+            Dreal = GCN(
+                real_features,
+                real_support,
+                dropout,
+                input_dim=3,
+                logging=True,
+                wd=FLAGS.weight_decay,
+            ).outputs
+            Dfake = GCN(
+                fake_features,
+                fake_support,
+                dropout,
+                input_dim=3,
+                logging=True,
+                wd=FLAGS.weight_decay,
+                reuse=True,
+            ).outputs
+            Dreal = tf.squeeze(Dreal)
+            Dfake = tf.squeeze(Dfake)
+
+            # LSGAN losses
+            G_loss = tf.square(1 - Dfake)
+            D_loss = tf.square(Dfake) + tf.square(1 - Dreal)
+            G_loss_sum = tf.summary.scalar("losses/generator", G_loss)
+            D_loss_sum = tf.summary.scalar("losses/discriminator", D_loss)
+
+            # Segregate variables
+            t_vars = tf.trainable_variables()
+            D_vars = [var for var in t_vars if "discriminator" in var.name]
+            G_vars = [var for var in t_vars if "generator" in var.name]
+
+            lr = get_learning_rate(global_step)
+            D_opt_op = tf.train.GradientDescentOptimizer(lr).minimize(
+                D_loss, var_list=D_vars, global_step=global_step
             )
             """
-            The loss is composed of 2 parts:
-            1. Matching distribution loss imposed between predicted and target point clouds via Chamfer or EMD
-            2. Self-consistency loss for better alignment of planes imposed on prediction
+            Use lower level ops to optimize Generator
+            1. Compute gradient of G_loss wrt pred_pc = dLdP
+            2. Compute gradient of pred_pc wrt generator vars given dLdP = dLdG
+            3. Apply gradient manually
             """
-            matching_loss, end_points = MODEL.get_matching_loss(
-                pred, labels_pl, end_points
-            )
-            # end_points["pcloss"] = tf.constant(42)
+            dLdP = tf.gradients(G_loss, fake_features)
+            dLdG = tf.gradients(pred, G_vars, grad_ys=dLdP)
+            G_opt_ops = [var - lr * grad for (var, grad) in zip(G_vars, dLdG)]
+            G_opt_op = tf.group(G_opt_ops)
+
             # loss_wt = get_consistency_loss_wt(global_step)
             # tf.summary.scalar("losses/wt", loss_wt)
-            consistency_loss = 1 * MODEL.get_plane_consistency_loss(pred)
+            # consistency_loss = 1 * MODEL.get_plane_consistency_loss(pred)
 
-            loss = matching_loss # + consistency_loss
-            tf.summary.scalar("losses/total", loss)
+            # loss = matching_loss # + consistency_loss
+            # tf.summary.scalar("losses/total", loss)
 
-            print("--- Get training operator")
-            # Get training operator
-            learning_rate = get_learning_rate(global_step)
-            tf.summary.scalar("learning_rate", learning_rate)
-            if OPTIMIZER == "momentum":
-                optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=MOMENTUM)
-            elif OPTIMIZER == "adam":
-                optimizer = tf.train.AdamOptimizer(learning_rate)
-            grads_and_vars = optimizer.compute_gradients(matching_loss)
-            grads_and_vars = optimizer.compute_gradients(consistency_loss)
+            # grads_and_vars = optimizer.compute_gradients(matching_loss)
+            # grads_and_vars = optimizer.compute_gradients(consistency_loss)
 
-            grads_and_vars = optimizer.compute_gradients(loss)
-            train_op = optimizer.apply_gradients(
-                grads_and_vars, global_step=global_step
-            )
+            # grads_and_vars = optimizer.compute_gradients(loss)
+            # train_op = optimizer.apply_gradients(
+            #     grads_and_vars, global_step=global_step
+            # )
 
             # Plot gradients wrt prediction - should be diff when loss includes plane regularization
-            G = tf.get_default_graph()
+            # G = tf.get_default_graph()
             # emd_grad = G.get_operation_by_name('gradients/MatchCost_grad/tuple/control_dependency_1').outputs[0]
-            plane_grad = G.get_operation_by_name('gradients_1/PlaneDistance_grad/PlaneDistanceGrad').outputs[0]
+            # plane_grad = G.get_operation_by_name('gradients_1/PlaneDistance_grad/PlaneDistanceGrad').outputs[0]
             # tf.summary.histogram("emd_prediction_gradient", emd_grad)
-            tf.summary.histogram("plane_prediction_gradient", plane_grad)
+            # tf.summary.histogram("plane_prediction_gradient", plane_grad)
 
-            # Add ops to save and restore all the variables.
-            saver = tf.train.Saver()
-            # saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
+        # Add summary writers
+        # merged = tf.summary.merge_all()
+        G_sum = tf.summary.merge([chamfer_sum, G_loss_sum])
+        D_sum = tf.summary.merge([D_loss_sum])
+        train_writer = tf.summary.FileWriter(LOG_DIR)
 
         # Create a session
         config = tf.ConfigProto()
@@ -223,44 +336,96 @@ def train():
         config.allow_soft_placement = True
         sess = tf.Session(config=config)
 
-        # Add summary writers
-        merged = tf.summary.merge_all()
-        train_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, "train"), sess.graph)
-        test_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, "test"), sess.graph)
+        # Write graph
+        train_writer.add_graph(sess.graph)
 
+        # Add ops to save and restore all the variables.
+        saver = tf.train.Saver()  # saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
         # Init variables
         ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
         if ckpt_path:
             saver.restore(sess, ckpt_path)
-            start_epoch = int(ckpt_path.split('-')[-1]) + 1
+            start_epoch = int(ckpt_path.split("-")[-1]) + 1
         else:
             init = tf.global_variables_initializer()
             sess.run(init)
             start_epoch = 1
 
-        ops = {
-            "pointclouds_pl": pointclouds_pl,
-            "labels_pl": labels_pl,
-            "is_training_pl": is_training_pl,
-            "pred": pred,
-            "loss": loss,
-            "train_op": train_op,
-            "merged": merged,
-            "step": global_step,
-            "fnames": fnames,
-            "end_points": end_points,
-        }
+        num_files = get_num_files("train")  # set manually for now
+        num_batches = old_div(num_files, BATCH_SIZE)
+        print_freq = min(num_batches, 10)
 
         for epoch in range(start_epoch, MAX_EPOCH + 1):
             log_string("**** EPOCH %03d ****" % (epoch))
-            sys.stdout.flush()
 
-            train_one_epoch(sess, ops, train_writer)
-            # epoch_loss = eval_one_epoch(sess, ops, test_writer)
-            # if epoch_loss < best_loss:
-            #     best_loss = epoch_loss
-            #     save_path = saver.save(sess, os.path.join(LOG_DIR, "best_model_epoch_%03d.ckpt"%(epoch)))
-            #     log_string("Model saved in file: %s" % save_path)
+            loss_sum = 0
+            for batch_idx in range(num_batches):
+                # Run input pipeline to get gt - required to pass gt as placeholder because Generator backprop is not done in same session call as forward pass
+                partial_pc, gt_pc = sess.run(
+                    [partial_cloud, complete_cloud],
+                )
+                # Run first part of pipeline to get gt & pred point cloud as Numpy arrays
+                pred_pc, pgm, lss = sess.run(
+                    [pred, pred_gt_matching, matching_loss],
+                    feed_dict={
+                        is_training_pl: True,
+                        partial_pl: partial_pc,
+                        complete_pl: gt_pc
+                        },
+                )
+                # Cut out the batch dim
+                gt_pc = np.squeeze(gt_pc, 0)
+                pred_pc = np.squeeze(pred_pc, 0)
+                pred_pc = preprocess_features(pred_pc)
+                pgm = np.squeeze(pgm)
+
+                """ 
+                Use Pred -> GT NN matching to induce graph on pred pc
+
+                Pred Pt X --NN--> GT Pt X --Adjacency--> GT Pt Y1, Y2 ... --NN--> Pred Pt {Z11, Z12..}, {Z21, Z22..}, ..
+                Multiple neighbors for each GT point here because the reverse matching from GT -> Pred is being computed from Pred -> GT so multiple Pred points may be close to one GT point. 
+                Alternatively, we may use the GT -> Pred matching for this reverse matching - more intuitive in my opinion. TBD
+                """
+                rev_matching = defaultdict(list)
+                for k, v in enumerate(pgm):
+                    rev_matching[v].append(k)
+                fake_adj = np.zeros((num_pred, num_pred))
+                for i, row in enumerate(adj[pgm, :]):
+                    nnz = np.nonzero(row)[0]
+                    nbrs = [el for n in nnz for el in rev_matching[n]]
+                    fake_adj[i, nbrs] = 1
+                # Set diagonals 0
+                for i in range(num_pred):
+                    fake_adj[i, i] = 0
+                fake_supp = [preprocess_adj(fake_adj)]
+
+                _, summ = sess.run(
+                    [G_opt_op, G_sum],
+                    feed_dict={
+                        is_training_pl: True,
+                        partial_pl: partial_pc,
+                        complete_pl: np.expand_dims(gt_pc, 0),
+                        fake_features: pred_pc,
+                        fake_support[0]: fake_supp[0],
+                        dropout: FLAGS.dropout,
+                    },
+                )
+                step = (epoch-1) * num_batches + batch_idx + 1
+                train_writer.add_summary(summ, step)
+
+                _, summ = sess.run(
+                    [D_opt_op, D_sum],
+                    feed_dict={
+                        fake_features: pred_pc,
+                        fake_support[0]: fake_supp[0],
+                        real_features: gt_pc,
+                        real_support[0]: supp[0],
+                        dropout: FLAGS.dropout,
+                    },
+                )
+                train_writer.add_summary(summ, step)
+                if step % print_freq == 0:
+                    print('Step: {}, Chamfer loss: {:.2f}'.format(step, 100*lss))
 
             # Save the variables to disk.
             if epoch % 10 == 0:
@@ -272,14 +437,14 @@ def train():
 
 def get_num_files(split):
     # num_files = len(os.listdir("{}/{}".format(data_root, split)))
-    num_files = len(glob("{}/*.mat".format(data_root)))
-    num_files *= 0.8 if split == 'train' else 0.2
+    num_files = 5e4
+    num_files *= 0.8 if split == "train" else 0.2
     return int(num_files)
 
 
 def eval():
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, nums = input_pipeline('train', 1)
+        pointclouds_pl, labels_pl, nums = input_pipeline("train", 1)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
             is_training_pl = tf.placeholder(tf.bool, shape=())
@@ -314,7 +479,7 @@ def eval():
 
         total_consistency_loss = 0
         total_loss = 0
-        num_files = get_num_files('train')
+        num_files = get_num_files("train")
         # i = 0
         # while True:
         for i in tqdm(range(num_files)):
@@ -332,16 +497,11 @@ def eval():
 
             # Bookkeeping
             i += 1
-            data = {
-                "local": local,
-                "gt": future,
-                "predicted": predicted,
-                "loss": lss,
-            }
+            data = {"local": local, "gt": future, "predicted": predicted, "loss": lss}
             # savemat("{}/{}.mat".format(LOG_DIR, n), data)
         print(
             "Iters: {}, Total loss: {:.6f}, Total consistency loss: {:.6f}".format(
-                i, total_loss/i, total_consistency_loss/i
+                i, total_loss / i, total_consistency_loss / i
             )
         )
 
@@ -362,7 +522,7 @@ def train_one_epoch(sess, ops, train_writer):
     is_training = True
 
     # Shuffle train samples
-    num_files = get_num_files('train')      # set manually for now
+    num_files = get_num_files("train")  # set manually for now
     num_batches = old_div(num_files, BATCH_SIZE)
 
     loss_sum = 0
@@ -441,7 +601,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 
 if __name__ == "__main__":
-    log_string("pid: %s" % (str(os.getpid())))
-    # train()
-    eval()
+    train()
+    # eval()
     LOG_FOUT.close()

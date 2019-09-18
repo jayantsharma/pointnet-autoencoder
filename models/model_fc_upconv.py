@@ -95,10 +95,10 @@ def get_model(point_cloud, is_training, bn_decay=None):
 def get_loss(pred, label, end_points):
     """ pred: BxNx3,
         label: BxNx3, """
-    dists_forward,_,dists_backward,_ = tf_nndistance.nn_distance(pred, label)
+    dists_forward, forward_matching, dists_backward, backward_matching = tf_nndistance.nn_distance(pred, label)
     loss = tf.reduce_mean(dists_forward+dists_backward)
     end_points['pcloss'] = loss
-    return loss*100, end_points
+    return loss*100, end_points, forward_matching, backward_matching
 
 
 if __name__=='__main__':
