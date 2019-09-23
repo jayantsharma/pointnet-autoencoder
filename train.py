@@ -221,7 +221,7 @@ def train():
     with tf.Graph().as_default():
         num_partial = 553
         num_pred = 768
-        partial_cloud, complete_cloud, adj, fnames = input_pipeline("train", BATCH_SIZE)
+        partial_cloud, complete_cloud, features, fnames = input_pipeline("train", BATCH_SIZE)
         with open("%s/adjacency.pkl" % data_root, "rb") as f:
             data = pickle.load(f)
             adj = data["adj"]
@@ -248,6 +248,11 @@ def train():
                 pred, complete_pl, end_points
             )
             chamfer_sum = tf.summary.scalar("losses/chamfer", matching_loss)
+            # Get statistics on NN - num_unique_nbrs, median_duplication_count
+            _, _, unique_counts = tf.unique_with_counts(tf.reshape(pred_gt_matching, [-1]))
+            num_NN = tf.summary.scalar("NN/num", tf.size(unique_counts))
+            median_dup = tf.summary.scalar("NN/median_dup", tf.contrib.distributions.percentile(unique_counts, 50))
+            NN_sum = tf.summary.merge([num_NN, median_dup])
 
             # Define GCN placeholders
             real_features = tf.placeholder(tf.float32, shape=(num_pred, 3))
@@ -278,8 +283,12 @@ def train():
 
             # LSGAN losses
             G_loss = tf.square(1 - Dfake)
-            D_loss = tf.square(Dfake) + tf.square(1 - Dreal)
+            D_loss_fake = tf.square(Dfake)
+            D_loss_real = tf.square(1 - Dreal)
+            D_loss = D_loss_fake + D_loss_real
             G_loss_sum = tf.summary.scalar("losses/generator", G_loss)
+            D_loss_fake_sum = tf.summary.scalar("losses/discriminator/fake", D_loss_fake)
+            D_loss_real_sum = tf.summary.scalar("losses/discriminator/real", D_loss_real)
             D_loss_sum = tf.summary.scalar("losses/discriminator", D_loss)
 
             # Segregate variables
@@ -327,7 +336,7 @@ def train():
         # Add summary writers
         # merged = tf.summary.merge_all()
         G_sum = tf.summary.merge([chamfer_sum, G_loss_sum])
-        D_sum = tf.summary.merge([D_loss_sum])
+        D_sum = tf.summary.merge([D_loss_fake_sum, D_loss_real_sum, D_loss_sum])
         train_writer = tf.summary.FileWriter(LOG_DIR)
 
         # Create a session
@@ -360,21 +369,23 @@ def train():
 
             loss_sum = 0
             for batch_idx in range(num_batches):
+                step = (epoch-1) * num_batches + batch_idx + 1
                 # Run input pipeline to get gt - required to pass gt as placeholder because Generator backprop is not done in same session call as forward pass
-                partial_pc, gt_pc = sess.run(
-                    [partial_cloud, complete_cloud],
+                partial_pc, gt_pc, gt_ftrs = sess.run(
+                    [partial_cloud, complete_cloud, features],
                 )
                 # Run first part of pipeline to get gt & pred point cloud as Numpy arrays
-                pred_pc, pgm, lss = sess.run(
-                    [pred, pred_gt_matching, matching_loss],
+                pred_pc, pgm, lss, NN_summ = sess.run(
+                    [pred, pred_gt_matching, matching_loss, NN_sum],
                     feed_dict={
                         is_training_pl: True,
                         partial_pl: partial_pc,
                         complete_pl: gt_pc
                         },
                 )
+                train_writer.add_summary(NN_summ, step)
                 # Cut out the batch dim
-                gt_pc = np.squeeze(gt_pc, 0)
+                gt_ftrs = np.squeeze(gt_ftrs, 0)
                 pred_pc = np.squeeze(pred_pc, 0)
                 pred_pc = preprocess_features(pred_pc)
                 pgm = np.squeeze(pgm)
@@ -404,13 +415,12 @@ def train():
                     feed_dict={
                         is_training_pl: True,
                         partial_pl: partial_pc,
-                        complete_pl: np.expand_dims(gt_pc, 0),
+                        complete_pl: gt_pc,
                         fake_features: pred_pc,
                         fake_support[0]: fake_supp[0],
                         dropout: FLAGS.dropout,
                     },
                 )
-                step = (epoch-1) * num_batches + batch_idx + 1
                 train_writer.add_summary(summ, step)
 
                 _, summ = sess.run(
@@ -418,7 +428,7 @@ def train():
                     feed_dict={
                         fake_features: pred_pc,
                         fake_support[0]: fake_supp[0],
-                        real_features: gt_pc,
+                        real_features: gt_ftrs,
                         real_support[0]: supp[0],
                         dropout: FLAGS.dropout,
                     },

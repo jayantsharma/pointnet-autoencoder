@@ -183,11 +183,11 @@ def write_point_clouds():
         )
         return example.SerializeToString()
 
-    for split in splits:
+    for split in splits[:1]:
         writer = tf.python_io.TFRecordWriter(os.path.join(ROOT, split + ".tfrecord"))
         with open('%s.list' % split) as f:
             idxs = f.read().splitlines()
-        for idx in tqdm(idxs):
+        for idx in tqdm(idxs[:100]):
             s = "{}/{}.pkl".format(ROOT, idx)
             with open(s, 'rb') as f:
                 data = pickle.load(f)
