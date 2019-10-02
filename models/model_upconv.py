@@ -97,12 +97,12 @@ def get_matching_loss(pred, label, end_points):
         label: BxNx3,
     """
     # NN distance
-    dists_forward,_,dists_backward,_ = tf_nndistance.nn_distance(pred, label)
+    dists_forward, forward_matching, dists_backward, backward_matching = tf_nndistance.nn_distance(pred, label)
     loss = tf.reduce_mean(dists_forward+dists_backward)
     end_points['pcloss'] = loss
     loss *= 100
     tf.summary.scalar('losses/chamfer', loss)
-    return loss, end_points
+    return loss, end_points, forward_matching, backward_matching
 
     # # EMD
     # match = tf_approxmatch.approx_match(label, pred)

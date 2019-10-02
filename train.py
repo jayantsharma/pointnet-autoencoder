@@ -293,7 +293,7 @@ def eval():
             pred, end_points = MODEL.get_model(
                 pointclouds_pl, is_training_pl, bn_decay=bn_decay
             )
-            loss, end_points = MODEL.get_matching_loss(pred, labels_pl, end_points)
+            loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(pred, labels_pl, end_points)
             consistency_loss = MODEL.get_plane_consistency_loss(pred)
 
         # Add ops to save and restore all the variables.
@@ -319,8 +319,8 @@ def eval():
         # while True:
         for i in tqdm(range(1000)):
             # try:
-            local, future, predicted, lss, clss, ns = sess.run(
-                [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums],
+            local, future, predicted, lss, clss, ns, pgm, gpm = sess.run(
+                [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums, pred_gt_matching, gt_pred_matching],
                 feed_dict={is_training_pl: False},
             )
             local = np.squeeze(local)
@@ -329,6 +329,8 @@ def eval():
             n = ns[0][0]
             total_loss += lss
             total_consistency_loss += clss
+            pgm = np.squeeze(pgm,0)
+            gpm = np.squeeze(gpm,0)
 
             # Bookkeeping
             i += 1
@@ -337,8 +339,10 @@ def eval():
                 "gt": future,
                 "predicted": predicted,
                 "loss": lss,
+                "pgm": pgm,
+                "gpm": gpm
             }
-            # savemat("{}/{}.mat".format(LOG_DIR, n), data)
+            savemat("{}/{}.mat".format(LOG_DIR, n), data)
         print(
             "Iters: {}, Total loss: {:.6f}, Total consistency loss: {:.6f}".format(
                 i, total_loss/i, total_consistency_loss/i
