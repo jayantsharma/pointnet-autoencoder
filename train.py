@@ -279,7 +279,8 @@ def get_num_files(split):
 
 def eval():
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, nums = input_pipeline('test', 1)
+        pointclouds_pl, labels_pl, adj_pl, nums = input_pipeline('test', 1)
+        adj_dense = tf.sparse.to_dense(adj_pl)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
             is_training_pl = tf.placeholder(tf.bool, shape=())
@@ -319,8 +320,8 @@ def eval():
         # while True:
         for i in tqdm(range(1000)):
             # try:
-            local, future, predicted, lss, clss, ns, pgm, gpm = sess.run(
-                [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums, pred_gt_matching, gt_pred_matching],
+            local, future, predicted, lss, clss, ns, pgm, gpm, adj = sess.run(
+                [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums, pred_gt_matching, gt_pred_matching, adj_dense],
                 feed_dict={is_training_pl: False},
             )
             local = np.squeeze(local)
@@ -329,8 +330,21 @@ def eval():
             n = ns[0][0]
             total_loss += lss
             total_consistency_loss += clss
+            adj = np.squeeze(adj,0)
             pgm = np.squeeze(pgm,0)
             gpm = np.squeeze(gpm,0)
+
+            num_pred = 768
+            fake_adj = np.zeros((num_pred, num_pred))
+            for i, row in enumerate(adj[pgm, :]):
+                nnz = np.nonzero(row)[0]
+                # nbrs = [el for n in nnz for el in rev_matching[n]]
+                nbrs = [gpm[n] for n in nnz]
+                fake_adj[i, nbrs] = 1
+            # Set diagonals 0
+            for i in range(num_pred):
+                fake_adj[i, i] = 0
+
 
             # Bookkeeping
             i += 1
@@ -340,7 +354,9 @@ def eval():
                 "predicted": predicted,
                 "loss": lss,
                 "pgm": pgm,
-                "gpm": gpm
+                "gpm": gpm,
+                "adj": adj,
+                "fake_adj": fake_adj
             }
             savemat("{}/{}.mat".format(LOG_DIR, n), data)
         print(
