@@ -30,21 +30,28 @@ def _parse_example(serialized_record):
     example = tf.parse_single_example(
         serialized_record,
         features={
-            "feat": tf.FixedLenFeature([], tf.string),
-            "label": tf.FixedLenFeature([], tf.string),
+            "partial": tf.FixedLenFeature([], tf.string),
+            "complete": tf.FixedLenFeature([], tf.string),
+            "features": tf.FixedLenFeature([], tf.string),
+            "adj_orig_coords": tf.FixedLenFeature([], tf.string),
+            "adj_orig_values": tf.FixedLenFeature([], tf.string),
+            "adj_label_coords": tf.FixedLenFeature([], tf.string),
+            "adj_label_values": tf.FixedLenFeature([], tf.string),
+            "adj_norm_coords": tf.FixedLenFeature([], tf.string),
+            "adj_norm_values": tf.FixedLenFeature([], tf.string),
             "num": tf.FixedLenFeature([], tf.string),
         },
         name="features",
     )
 
-    feat = tf.decode_raw(example["feat"], tf.float64)
-    label = tf.decode_raw(example["label"], tf.float64)
+    partial = tf.decode_raw(example["partial"], tf.float64)
+    complete = tf.decode_raw(example["complete"], tf.float64)
     num = tf.decode_raw(example["num"], tf.int64)
 
-    feat = tf.cast(tf.reshape(feat, (553,3)), tf.float32)
-    label = tf.cast(tf.reshape(label, (768,3)), tf.float32)
+    partial = tf.cast(tf.reshape(partial, (553,3)), tf.float32)
+    complete = tf.cast(tf.reshape(complete, (768,3)), tf.float32)
 
-    return feat, label, num
+    return partial, complete, num
 
 
 def preprocess(feat, label, fname_bytes):
@@ -230,7 +237,7 @@ if __name__ == "__main__":
     # distribute_point_clouds()
 
     # STEP 3
-    write_point_clouds()
+    # write_point_clouds()
     test_pipeline()
 
     # STEP 4 - Replicate train-test split
