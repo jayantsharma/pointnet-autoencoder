@@ -33,9 +33,11 @@ from input_pipeline import input_pipeline
 from input_pipeline import ROOT as data_root
 
 # Graph Conv imports
+sys.path.append(os.path.join(ROOT_DIR, "/home/jayant/gae"))
+from gae.model import GCNModelAE, GCNModelVAE
+from gae.layers import reset_graphconvolution_uid
 sys.path.append(os.path.join(ROOT_DIR, "/home/jayant/gcn"))
-from gcn.utils import *
-from gcn.models import GCN, MLP
+from gcn.utils import preprocess_features, preprocess_adj
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -77,6 +79,12 @@ parser.add_argument(
         default=1, 
         help="Batch Size during training [default: 32]"
         )
+parser.add_argument(
+    "--surface_loss_wt",
+    type=float,
+    default=1,
+    help="Weight for surface loss from GAE",
+    )
 parser.add_argument(
     "--weight_decay",
     type=float,
@@ -221,11 +229,8 @@ def train():
     with tf.Graph().as_default():
         num_partial = 553
         num_pred = 768
-        partial_cloud, complete_cloud, features, fnames = input_pipeline("train", BATCH_SIZE)
-        with open("%s/adjacency.pkl" % data_root, "rb") as f:
-            data = pickle.load(f)
-            adj = data["adj"]
-            supp = data["support"]
+        partial, complete, features, adj_orig, _, adj_norm, nums = input_pipeline("train")
+        adj_orig_dense = tf.sparse.to_dense(adj_orig)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
             partial_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE,num_partial,3))
@@ -240,76 +245,82 @@ def train():
 
             # Predict point cloud
             with tf.variable_scope("generator"):
-                pred, end_points = MODEL.get_model(
-                    partial_pl, is_training_pl, bn_decay=bn_decay
-                )
+                pred, end_points = MODEL.get_model(partial_pl, is_training_pl, bn_decay=bn_decay)
             # Construct proxy mesh using NN matching
-            matching_loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(
-                pred, complete_pl, end_points
-            )
+            matching_loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(pred, complete_pl, end_points)
+
             chamfer_sum = tf.summary.scalar("losses/chamfer", matching_loss)
             # Get statistics on NN - num_unique_nbrs, median_duplication_count
             _, _, unique_counts = tf.unique_with_counts(tf.reshape(pred_gt_matching, [-1]))
             num_NN = tf.summary.scalar("NN/num", tf.size(unique_counts))
             median_dup = tf.summary.scalar("NN/median_dup", tf.contrib.distributions.percentile(unique_counts, 50))
-            NN_sum = tf.summary.merge([num_NN, median_dup])
 
-            # Define GCN placeholders
-            real_features = tf.placeholder(tf.float32, shape=(num_pred, 3))
-            fake_features = tf.placeholder(tf.float32, shape=(num_pred, 3))
-            real_support = [tf.sparse_placeholder(tf.float32)]
-            fake_support = [tf.sparse_placeholder(tf.float32)]
+            # Define GAE placeholders
+            real_features_pl = tf.placeholder(tf.float32, shape=(num_pred, 3))
+            fake_features_pl = tf.placeholder(tf.float32, shape=(num_pred, 3))
+            real_adj_norm_pl = tf.sparse_placeholder(tf.float32)
+            fake_adj_norm_pl = tf.sparse_placeholder(tf.float32)
             dropout = tf.placeholder_with_default(0.0, shape=())
-            # GCN
-            Dreal = GCN(
-                real_features,
-                real_support,
-                dropout,
-                input_dim=3,
-                logging=True,
-                wd=FLAGS.weight_decay,
-            ).outputs
-            Dfake = GCN(
-                fake_features,
-                fake_support,
-                dropout,
-                input_dim=3,
-                logging=True,
-                wd=FLAGS.weight_decay,
-                reuse=True,
-            ).outputs
-            Dreal = tf.squeeze(Dreal)
-            Dfake = tf.squeeze(Dfake)
 
-            # LSGAN losses
-            G_loss = tf.square(1 - Dfake)
-            D_loss_fake = tf.square(Dfake)
-            D_loss_real = tf.square(1 - Dreal)
-            D_loss = D_loss_fake + D_loss_real
-            G_loss_sum = tf.summary.scalar("losses/generator", G_loss)
-            D_loss_fake_sum = tf.summary.scalar("losses/discriminator/fake", D_loss_fake)
-            D_loss_real_sum = tf.summary.scalar("losses/discriminator/real", D_loss_real)
-            D_loss_sum = tf.summary.scalar("losses/discriminator", D_loss)
+            # GAE
+            dims = { 'hidden1': 32, 'hidden2': 16 }
+            Dreal = GCNModelAE(
+                real_features_pl,
+                real_adj_norm_pl, 
+                3,
+                dropout,
+                dims=dims,
+                name='feature_extractor').embeddings
+            # Mean-center features before running through network
+            centered_fake_features = fake_features_pl - tf.reduce_mean(fake_features_pl, axis=0)
+            reset_graphconvolution_uid()
+            Dfake = GCNModelAE(
+                centered_fake_features,
+                fake_adj_norm_pl,
+                3,
+                dropout,
+                dims=dims,
+                name='feature_extractor',
+                reuse=True).embeddings
+
+            # Feature reconstruction loss
+            pred_gt_matching.set_shape([BATCH_SIZE, num_pred])
+            gt_pred_matching.set_shape([BATCH_SIZE, num_pred])
+            match_Dfake = tf.gather(Dfake, tf.squeeze(pred_gt_matching,0))
+            match_Dreal = tf.gather(Dreal, tf.squeeze(gt_pred_matching,0))
+            feature_loss = 0.5 * tf.add(
+                    tf.losses.mean_squared_error(Dreal, match_Dfake),
+                    tf.losses.mean_squared_error(match_Dreal, Dfake)
+                    )
+            feature_loss_sum = tf.summary.scalar("losses/feature", feature_loss)
 
             # Segregate variables
             t_vars = tf.trainable_variables()
-            D_vars = [var for var in t_vars if "discriminator" in var.name]
             G_vars = [var for var in t_vars if "generator" in var.name]
+            F_vars = [var for var in t_vars if "feature_extractor" in var.name]
+            gae_keyed_var_list = {'/'.join(['gcnmodelae', *v.name[:-2].split('/')[1:]]): v for v in F_vars}
 
             lr = get_learning_rate(global_step)
-            D_opt_op = tf.train.GradientDescentOptimizer(lr).minimize(
-                D_loss, var_list=D_vars, global_step=global_step
-            )
             """
             Use lower level ops to optimize Generator
             1. Compute gradient of G_loss wrt pred_pc = dLdP
             2. Compute gradient of pred_pc wrt generator vars given dLdP = dLdG
             3. Apply gradient manually
             """
-            dLdP = tf.gradients(G_loss, fake_features)
-            dLdG = tf.gradients(pred, G_vars, grad_ys=dLdP)
-            G_opt_ops = [var - lr * grad for (var, grad) in zip(G_vars, dLdG)]
-            G_opt_op = tf.group(G_opt_ops)
+            dLdP = tf.gradients(feature_loss, fake_features_pl)
+            dLdG = tf.gradients(pred, G_vars, grad_ys=dLdP) * FLAGS.surface_loss_wt
+            dLdG_matching = tf.gradients(matching_loss, G_vars)     # Chamfer/EMD
+            G_opt_ops = [var - lr * (grad+grad2) for (var, grad, grad2) in zip(G_vars, dLdG, dLdG_matching)]
+            with tf.control_dependencies(G_opt_ops):
+                G_opt_op = tf.assign(global_step, global_step+1)
+
+            # Gradient summaries
+            gradient_sum = []
+            for op in dLdG:
+                gradient_sum.append(tf.summary.histogram('/'.join(['gradients',*op.name.split('/')[1:],'graph']), op))
+            for op in dLdG_matching:
+                gradient_sum.append(tf.summary.histogram('/'.join(['gradients',*op.name.split('/')[1:],'matching']), op))
+            gradient_sum = tf.summary.merge(gradient_sum)
 
             # loss_wt = get_consistency_loss_wt(global_step)
             # tf.summary.scalar("losses/wt", loss_wt)
@@ -334,9 +345,7 @@ def train():
             # tf.summary.histogram("plane_prediction_gradient", plane_grad)
 
         # Add summary writers
-        # merged = tf.summary.merge_all()
-        G_sum = tf.summary.merge([chamfer_sum, G_loss_sum])
-        D_sum = tf.summary.merge([D_loss_fake_sum, D_loss_real_sum, D_loss_sum])
+        summary_op = tf.summary.merge_all()
         train_writer = tf.summary.FileWriter(LOG_DIR)
 
         # Create a session
@@ -350,6 +359,8 @@ def train():
 
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()  # saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
+        gae_restorer = tf.train.Saver(var_list=gae_keyed_var_list)
+
         # Init variables
         ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
         if ckpt_path:
@@ -358,6 +369,7 @@ def train():
         else:
             init = tf.global_variables_initializer()
             sess.run(init)
+            gae_restorer.restore(sess, tf.train.latest_checkpoint('/home/jayant/gae/log1e3'))
             start_epoch = 1
 
         num_files = get_num_files("train")  # set manually for now
@@ -370,25 +382,33 @@ def train():
             loss_sum = 0
             for batch_idx in range(num_batches):
                 step = (epoch-1) * num_batches + batch_idx + 1
-                # Run input pipeline to get gt - required to pass gt as placeholder because Generator backprop is not done in same session call as forward pass
-                partial_pc, gt_pc, gt_ftrs = sess.run(
-                    [partial_cloud, complete_cloud, features],
+                """
+                STEP 1
+                Run input pipeline to get gt
+                Required to pass gt as placeholder because Generator backprop is not done in same session call as forward pass
+                """
+                prtl, cmplt, real_ftrs, adj, real_adj_norm = sess.run(
+                    [partial, complete, features, adj_orig_dense, adj_norm],
                 )
-                # Run first part of pipeline to get gt & pred point cloud as Numpy arrays
-                pred_pc, pgm, lss, NN_summ = sess.run(
-                    [pred, pred_gt_matching, matching_loss, NN_sum],
+                prtl = np.expand_dims(prtl, 0)
+                cmplt = np.expand_dims(cmplt, 0)
+
+                """
+                STEP 2
+                Predict point cloud and process its induced graph
+                """
+                pred_pc, pgm, gpm, lss = sess.run(
+                    [pred, pred_gt_matching, gt_pred_matching, matching_loss],
                     feed_dict={
                         is_training_pl: True,
-                        partial_pl: partial_pc,
-                        complete_pl: gt_pc
+                        partial_pl: prtl,
+                        complete_pl: cmplt
                         },
                 )
-                train_writer.add_summary(NN_summ, step)
                 # Cut out the batch dim
-                gt_ftrs = np.squeeze(gt_ftrs, 0)
-                pred_pc = np.squeeze(pred_pc, 0)
-                pred_pc = preprocess_features(pred_pc)
+                fake_ftrs = np.squeeze(pred_pc, 0)
                 pgm = np.squeeze(pgm)
+                gpm = np.squeeze(gpm)
 
                 """ 
                 Use Pred -> GT NN matching to induce graph on pred pc
@@ -396,44 +416,43 @@ def train():
                 Pred Pt X --NN--> GT Pt X --Adjacency--> GT Pt Y1, Y2 ... --NN--> Pred Pt {Z11, Z12..}, {Z21, Z22..}, ..
                 Multiple neighbors for each GT point here because the reverse matching from GT -> Pred is being computed from Pred -> GT so multiple Pred points may be close to one GT point. 
                 Alternatively, we may use the GT -> Pred matching for this reverse matching - more intuitive in my opinion. TBD
+
+                Using GT -> Pred for reverse matching
                 """
-                rev_matching = defaultdict(list)
-                for k, v in enumerate(pgm):
-                    rev_matching[v].append(k)
+                # rev_matching = defaultdict(list)
+                # for k, v in enumerate(pgm):
+                #     rev_matching[v].append(k)
                 fake_adj = np.zeros((num_pred, num_pred))
                 for i, row in enumerate(adj[pgm, :]):
                     nnz = np.nonzero(row)[0]
-                    nbrs = [el for n in nnz for el in rev_matching[n]]
+                    # nbrs = [el for n in nnz for el in rev_matching[n]]
+                    nbrs = [gpm[n] for n in nnz]
                     fake_adj[i, nbrs] = 1
                 # Set diagonals 0
                 for i in range(num_pred):
                     fake_adj[i, i] = 0
-                fake_supp = [preprocess_adj(fake_adj)]
+                fake_adj_norm = preprocess_adj(fake_adj)
 
-                _, summ = sess.run(
-                    [G_opt_op, G_sum],
-                    feed_dict={
+                """
+                STEP 3
+                Compute feature reconstruction loss and train
+                """
+                feed_dict = {
                         is_training_pl: True,
-                        partial_pl: partial_pc,
-                        complete_pl: gt_pc,
-                        fake_features: pred_pc,
-                        fake_support[0]: fake_supp[0],
+                        partial_pl: prtl,
+                        complete_pl: cmplt,
+                        real_features_pl: real_ftrs,
+                        real_adj_norm_pl: real_adj_norm,
+                        fake_features_pl: fake_ftrs,
+                        fake_adj_norm_pl: fake_adj_norm,
                         dropout: FLAGS.dropout,
-                    },
-                )
-                train_writer.add_summary(summ, step)
+                        }
+                if step % 100 == 0:
+                    _, summary = sess.run([G_opt_op, summary_op], feed_dict=feed_dict)
+                    train_writer.add_summary(summary, step)
+                else:
+                    _ = sess.run([G_opt_op], feed_dict=feed_dict)
 
-                _, summ = sess.run(
-                    [D_opt_op, D_sum],
-                    feed_dict={
-                        fake_features: pred_pc,
-                        fake_support[0]: fake_supp[0],
-                        real_features: gt_ftrs,
-                        real_support[0]: supp[0],
-                        dropout: FLAGS.dropout,
-                    },
-                )
-                train_writer.add_summary(summ, step)
                 if step % print_freq == 0:
                     print('Step: {}, Chamfer loss: {:.2f}'.format(step, 100*lss))
 
