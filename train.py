@@ -36,90 +36,56 @@ from input_pipeline import ROOT as data_root
 sys.path.append(os.path.join(ROOT_DIR, "/home/jayant/gae"))
 from gae.model import GCNModelAE, GCNModelVAE
 from gae.layers import reset_graphconvolution_uid
+
 sys.path.append(os.path.join(ROOT_DIR, "/home/jayant/gcn"))
 from gcn.utils import preprocess_features, preprocess_adj
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--gpu", type=int, default=0, help="GPU to use [default: GPU 0]")
+parser.add_argument("--model", default="model", help="Model name [default: model]")
 parser.add_argument(
-        "--gpu", 
-        type=int, 
-        default=0, 
-        help="GPU to use [default: GPU 0]"
-        )
+    "--category", default=None, help="Which single class to train on [default: None]"
+)
+parser.add_argument("--log_dir", default="log", help="Log dir [default: log]")
 parser.add_argument(
-        "--model", 
-        default="model", 
-        help="Model name [default: model]"
-        )
+    "--num_point", type=int, default=2048, help="Point Number [default: 2048]"
+)
 parser.add_argument(
-    "--category", 
-    default=None, 
-    help="Which single class to train on [default: None]"
-    )
+    "--max_epoch", type=int, default=201, help="Epoch to run [default: 201]"
+)
 parser.add_argument(
-        "--log_dir", 
-        default="log", 
-        help="Log dir [default: log]"
-        )
+    "--batch_size", type=int, default=1, help="Batch Size during training [default: 32]"
+)
 parser.add_argument(
-        "--num_point", 
-        type=int, 
-        default=2048, 
-        help="Point Number [default: 2048]"
-        )
-parser.add_argument(
-        "--max_epoch", 
-        type=int, 
-        default=201, 
-        help="Epoch to run [default: 201]"
-        )
-parser.add_argument(
-        "--batch_size", 
-        type=int, 
-        default=1, 
-        help="Batch Size during training [default: 32]"
-        )
-parser.add_argument(
-    "--surface_loss_wt",
-    type=float,
-    default=1,
-    help="Weight for surface loss from GAE",
-    )
+    "--surface_loss_wt", type=float, default=1, help="Weight for surface loss from GAE"
+)
 parser.add_argument(
     "--weight_decay",
     type=float,
     default=5e-4,
     help="Weight for L2 loss on embedding matrix.",
-    )
+)
 parser.add_argument(
-        "--dropout",
-        type=float,
-        default=0.5,
-        help='Dropout rate (1 - keep probability).'
-        )
+    "--dropout", type=float, default=0.5, help="Dropout rate (1 - keep probability)."
+)
 parser.add_argument(
     "--early_stopping",
     type=int,
     default=10,
     help="Tolerance for early stopping (# of epochs).",
-    )
+)
 parser.add_argument(
-        "--momentum", 
-        type=float, 
-        default=0.9, 
-        help="Initial learning rate [default: 0.9]"
-        )
+    "--momentum", type=float, default=0.9, help="Initial learning rate [default: 0.9]"
+)
 parser.add_argument(
-        "--optimizer", 
-        default="adam", 
-        help="adam or momentum [default: adam]"
-        )
+    "--optimizer", default="adam", help="adam or momentum [default: adam]"
+)
 parser.add_argument(
     "--learning_rate",
     type=float,
-    default=0.001,
+    default=1e-4,
     help="Initial learning rate [default: 0.001]",
-    )
+)
 parser.add_argument(
     "--decay_step",
     type=int,
@@ -229,12 +195,14 @@ def train():
     with tf.Graph().as_default():
         num_partial = 553
         num_pred = 768
-        partial, complete, features, adj_orig, _, adj_norm, nums = input_pipeline("train")
+        partial, complete, features, adj_orig, _, adj_norm, nums = input_pipeline(
+            "train"
+        )
         adj_orig_dense = tf.sparse.to_dense(adj_orig)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
-            partial_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE,num_partial,3))
-            complete_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE,num_pred,3))
+            partial_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE, num_partial, 3))
+            complete_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE, num_pred, 3))
             is_training_pl = tf.placeholder(tf.bool, shape=())
 
             # Note the global_step=batch parameter to minimize.
@@ -245,15 +213,23 @@ def train():
 
             # Predict point cloud
             with tf.variable_scope("generator"):
-                pred, end_points = MODEL.get_model(partial_pl, is_training_pl, bn_decay=bn_decay)
+                pred, end_points = MODEL.get_model(
+                    partial_pl, is_training_pl, bn_decay=bn_decay
+                )
             # Construct proxy mesh using NN matching
-            matching_loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(pred, complete_pl, end_points)
+            matching_loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(
+                pred, complete_pl, end_points
+            )
 
             chamfer_sum = tf.summary.scalar("losses/chamfer", matching_loss)
             # Get statistics on NN - num_unique_nbrs, median_duplication_count
-            _, _, unique_counts = tf.unique_with_counts(tf.reshape(pred_gt_matching, [-1]))
+            _, _, unique_counts = tf.unique_with_counts(
+                tf.reshape(pred_gt_matching, [-1])
+            )
             num_NN = tf.summary.scalar("NN/num", tf.size(unique_counts))
-            median_dup = tf.summary.scalar("NN/median_dup", tf.contrib.distributions.percentile(unique_counts, 50))
+            median_dup = tf.summary.scalar(
+                "NN/median_dup", tf.contrib.distributions.percentile(unique_counts, 50)
+            )
 
             # Define GAE placeholders
             real_features_pl = tf.placeholder(tf.float32, shape=(num_pred, 3))
@@ -263,16 +239,19 @@ def train():
             dropout = tf.placeholder_with_default(0.0, shape=())
 
             # GAE
-            dims = { 'hidden1': 32, 'hidden2': 16 }
+            dims = {"hidden1": 32, "hidden2": 16}
             Dreal = GCNModelAE(
                 real_features_pl,
-                real_adj_norm_pl, 
+                real_adj_norm_pl,
                 3,
                 dropout,
                 dims=dims,
-                name='feature_extractor').embeddings
+                name="feature_extractor",
+            ).embeddings
             # Mean-center features before running through network
-            centered_fake_features = fake_features_pl - tf.reduce_mean(fake_features_pl, axis=0)
+            centered_fake_features = fake_features_pl - tf.reduce_mean(
+                fake_features_pl, axis=0
+            )
             reset_graphconvolution_uid()
             Dfake = GCNModelAE(
                 centered_fake_features,
@@ -280,25 +259,28 @@ def train():
                 3,
                 dropout,
                 dims=dims,
-                name='feature_extractor',
-                reuse=True).embeddings
+                name="feature_extractor",
+                reuse=True,
+            ).embeddings
 
             # Feature reconstruction loss
             pred_gt_matching.set_shape([BATCH_SIZE, num_pred])
             gt_pred_matching.set_shape([BATCH_SIZE, num_pred])
-            match_Dfake = tf.gather(Dfake, tf.squeeze(pred_gt_matching,0))
-            match_Dreal = tf.gather(Dreal, tf.squeeze(gt_pred_matching,0))
+            match_Dfake = tf.gather(Dfake, tf.squeeze(pred_gt_matching, 0))
+            match_Dreal = tf.gather(Dreal, tf.squeeze(gt_pred_matching, 0))
             feature_loss = 0.5 * tf.add(
-                    tf.losses.mean_squared_error(Dreal, match_Dfake),
-                    tf.losses.mean_squared_error(match_Dreal, Dfake)
-                    )
+                tf.losses.mean_squared_error(Dreal, match_Dfake),
+                tf.losses.mean_squared_error(match_Dreal, Dfake),
+            )
             feature_loss_sum = tf.summary.scalar("losses/feature", feature_loss)
 
             # Segregate variables
             t_vars = tf.trainable_variables()
             G_vars = [var for var in t_vars if "generator" in var.name]
             F_vars = [var for var in t_vars if "feature_extractor" in var.name]
-            gae_keyed_var_list = {'/'.join(['gcnmodelae', *v.name[:-2].split('/')[1:]]): v for v in F_vars}
+            gae_keyed_var_list = {
+                "/".join(["gcnmodelae", *v.name[:-2].split("/")[1:]]): v for v in F_vars
+            }
 
             lr = get_learning_rate(global_step)
             """
@@ -309,17 +291,31 @@ def train():
             """
             dLdP = tf.gradients(feature_loss, fake_features_pl)
             dLdG = tf.gradients(pred, G_vars, grad_ys=dLdP) * FLAGS.surface_loss_wt
-            dLdG_matching = tf.gradients(matching_loss, G_vars)     # Chamfer/EMD
-            G_opt_ops = [var - lr * (grad+grad2) for (var, grad, grad2) in zip(G_vars, dLdG, dLdG_matching)]
+            dLdG_matching = tf.gradients(matching_loss, G_vars)  # Chamfer/EMD
+            G_opt_ops = [
+                tf.assign(
+                    var,
+                    var - lr * (tf.clip_by_norm(grad1, 1) + tf.clip_by_norm(grad2, 1)),
+                )
+                for (var, grad1, grad2) in zip(G_vars, dLdG, dLdG_matching)
+            ]
             with tf.control_dependencies(G_opt_ops):
-                G_opt_op = tf.assign(global_step, global_step+1)
+                G_opt_op = tf.assign(global_step, global_step + 1)
 
             # Gradient summaries
             gradient_sum = []
             for op in dLdG:
-                gradient_sum.append(tf.summary.histogram('/'.join(['gradients',*op.name.split('/')[1:],'graph']), op))
+                gradient_sum.append(
+                    tf.summary.histogram(
+                        "/".join(["gradients", *op.name.split("/")[1:], "graph"]), op
+                    )
+                )
             for op in dLdG_matching:
-                gradient_sum.append(tf.summary.histogram('/'.join(['gradients',*op.name.split('/')[1:],'matching']), op))
+                gradient_sum.append(
+                    tf.summary.histogram(
+                        "/".join(["gradients", *op.name.split("/")[1:], "matching"]), op
+                    )
+                )
             gradient_sum = tf.summary.merge(gradient_sum)
 
             # loss_wt = get_consistency_loss_wt(global_step)
@@ -369,7 +365,9 @@ def train():
         else:
             init = tf.global_variables_initializer()
             sess.run(init)
-            gae_restorer.restore(sess, tf.train.latest_checkpoint('/home/jayant/gae/log1e3'))
+            gae_restorer.restore(
+                sess, tf.train.latest_checkpoint("/home/jayant/gae/log1e3")
+            )
             start_epoch = 1
 
         num_files = get_num_files("train")  # set manually for now
@@ -381,14 +379,14 @@ def train():
 
             loss_sum = 0
             for batch_idx in range(num_batches):
-                step = (epoch-1) * num_batches + batch_idx + 1
+                step = (epoch - 1) * num_batches + batch_idx + 1
                 """
                 STEP 1
                 Run input pipeline to get gt
                 Required to pass gt as placeholder because Generator backprop is not done in same session call as forward pass
                 """
                 prtl, cmplt, real_ftrs, adj, real_adj_norm = sess.run(
-                    [partial, complete, features, adj_orig_dense, adj_norm],
+                    [partial, complete, features, adj_orig_dense, adj_norm]
                 )
                 prtl = np.expand_dims(prtl, 0)
                 cmplt = np.expand_dims(cmplt, 0)
@@ -402,8 +400,8 @@ def train():
                     feed_dict={
                         is_training_pl: True,
                         partial_pl: prtl,
-                        complete_pl: cmplt
-                        },
+                        complete_pl: cmplt,
+                    },
                 )
                 # Cut out the batch dim
                 fake_ftrs = np.squeeze(pred_pc, 0)
@@ -438,23 +436,25 @@ def train():
                 Compute feature reconstruction loss and train
                 """
                 feed_dict = {
-                        is_training_pl: True,
-                        partial_pl: prtl,
-                        complete_pl: cmplt,
-                        real_features_pl: real_ftrs,
-                        real_adj_norm_pl: real_adj_norm,
-                        fake_features_pl: fake_ftrs,
-                        fake_adj_norm_pl: fake_adj_norm,
-                        dropout: FLAGS.dropout,
-                        }
-                if step % 100 == 0:
-                    _, summary = sess.run([G_opt_op, summary_op], feed_dict=feed_dict)
-                    train_writer.add_summary(summary, step)
-                else:
-                    _ = sess.run([G_opt_op], feed_dict=feed_dict)
+                    is_training_pl: True,
+                    partial_pl: prtl,
+                    complete_pl: cmplt,
+                    real_features_pl: real_ftrs,
+                    real_adj_norm_pl: real_adj_norm,
+                    fake_features_pl: fake_ftrs,
+                    fake_adj_norm_pl: fake_adj_norm,
+                    dropout: FLAGS.dropout,
+                }
+                _, summary = sess.run([G_opt_op, summary_op], feed_dict=feed_dict)
+                train_writer.add_summary(summary, step)
+                # if step % 100 == 0:
+                #     _, summary = sess.run([G_opt_op, summary_op], feed_dict=feed_dict)
+                #     train_writer.add_summary(summary, step)
+                # else:
+                #     _ = sess.run([G_opt_op], feed_dict=feed_dict)
 
                 if step % print_freq == 0:
-                    print('Step: {}, Chamfer loss: {:.2f}'.format(step, 100*lss))
+                    print("Step: {}, Chamfer loss: {:.4f}".format(step, lss))
 
             # Save the variables to disk.
             if epoch % 2 == 0:
@@ -487,7 +487,9 @@ def eval():
             pred, end_points = MODEL.get_model(
                 tf.expand_dims(pointclouds_pl, 0), is_training_pl, bn_decay=bn_decay
             )
-            loss, end_points, _, _ = MODEL.get_matching_loss(pred, tf.expand_dims(labels_pl, 0), end_points)
+            loss, end_points, _, _ = MODEL.get_matching_loss(
+                pred, tf.expand_dims(labels_pl, 0), end_points
+            )
             consistency_loss = MODEL.get_plane_consistency_loss(pred)
 
         # Add ops to save and restore all the variables.
@@ -630,6 +632,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 
 if __name__ == "__main__":
-    # train()
-    eval()
+    train()
+    # eval()
     LOG_FOUT.close()
