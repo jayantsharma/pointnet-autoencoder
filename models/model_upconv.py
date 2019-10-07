@@ -92,16 +92,15 @@ def get_model(point_cloud, is_training, bn_decay=None):
     return net, end_points
 
 
-def get_matching_loss(pred, label, end_points):
+def get_matching_loss(pred, label):
     """ pred: BxNx3,
         label: BxNx3,
     """
     # NN distance
     dists_forward, forward_matching, dists_backward, backward_matching = tf_nndistance.nn_distance(pred, label)
     loss = tf.reduce_mean(dists_forward+dists_backward)
-    end_points['pcloss'] = loss
     loss *= 100
-    return loss, end_points, forward_matching, backward_matching
+    return loss, forward_matching, backward_matching
 
     # # EMD
     # match = tf_approxmatch.approx_match(label, pred)
@@ -109,6 +108,16 @@ def get_matching_loss(pred, label, end_points):
     # tf.summary.scalar('losses/matching', matching_loss)
     # end_points['pcloss'] = matching_loss
     # return matching_loss, end_points
+
+
+def get_emd(pred, label):
+    """ pred: BxNx3,
+        label: BxNx3,
+    """
+    # EMD
+    match = tf_approxmatch.approx_match(label, pred)
+    matching_loss = tf.reduce_mean(tf_approxmatch.match_cost(label, pred, match))
+    return matching_loss
 
 
 def get_plane_consistency_loss(pred):
