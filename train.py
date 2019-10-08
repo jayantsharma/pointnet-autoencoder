@@ -262,13 +262,9 @@ def train():
                 dims=dims,
                 name="feature_extractor",
             ).embeddings
-            # Mean-center features before running through network
-            centered_fake_features = fake_features_pl - tf.reduce_mean(
-                fake_features_pl, axis=0
-            )
             reset_graphconvolution_uid()
             Dfake = GCNModelAE(
-                centered_fake_features,
+                fake_features_pl,
                 fake_adj_norm_pl,
                 3,
                 dropout,

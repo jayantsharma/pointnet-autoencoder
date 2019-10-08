@@ -244,6 +244,7 @@ def write_point_clouds():
             with open(s, "rb") as f:
                 data = pickle.load(f)
             points, edges = data["V"], data["E"]
+            points = points - points.mean(axis=1, keepdims=True)
 
             # Get partial hand and permute order of points
             num_points = points.shape[1]
@@ -270,7 +271,7 @@ def write_point_clouds():
             adj_label_coords, adj_label_values, _ = sparse_to_tuple(adj_label)
 
             # Preprocessing for Graph Conv Network
-            features = preprocess_features(complete)
+            features = complete
             adj_norm_coords, adj_norm_values, _ = preprocess_adj(adj)
             # print(idx, np.linalg.norm(adj_orig_coords), np.linalg.norm(adj_norm_values))
 
