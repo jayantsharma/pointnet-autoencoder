@@ -490,7 +490,8 @@ def get_num_files(split):
 
 def eval():
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, _, _, _, _, nums = input_pipeline("test")
+        pointclouds_pl, labels_pl, _, adj_sp, _, _, nums = input_pipeline("test")
+        adj_dense = tf.sparse.to_dense(adj_sp)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
             is_training_pl = tf.placeholder(tf.bool, shape=())
@@ -501,10 +502,11 @@ def eval():
             bn_decay = get_bn_decay(batch)
 
             # # Get model and loss
-            pred, end_points = MODEL.get_model(
-                tf.expand_dims(pointclouds_pl, 0), is_training_pl, bn_decay=bn_decay
-            )
-            loss, end_points, _, _ = MODEL.get_matching_loss(
+            with tf.variable_scope("generator"):
+                pred, end_points = MODEL.get_model(
+                    tf.expand_dims(pointclouds_pl, 0), is_training_pl, bn_decay=bn_decay
+                )
+            loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(
                 pred, tf.expand_dims(labels_pl, 0), end_points
             )
             consistency_loss = MODEL.get_plane_consistency_loss(pred)
@@ -532,21 +534,40 @@ def eval():
         # while True:
         for i in tqdm(range(1000)):
             # try:
-            local, future, predicted, lss, clss, ns = sess.run(
-                [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums],
+            local, future, predicted, lss, clss, ns, pgm, gpm, adj = sess.run(
+                [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums, pred_gt_matching, gt_pred_matching, adj_dense],
                 feed_dict={is_training_pl: False},
             )
             local = np.squeeze(local)
             future = np.squeeze(future)
             predicted = np.squeeze(predicted)
-            n = ns[0][0]
+            n = ns[0]
             total_loss += lss
             total_consistency_loss += clss
+            pgm = np.squeeze(pgm, 0)
+            gpm = np.squeeze(gpm, 0)
+
+            num_pred = 768
+            fake_adj = np.zeros((num_pred, num_pred))
+            for i, row in enumerate(adj[pgm, :]):
+                nnz = np.nonzero(row)[0]
+                # nbrs = [el for n in nnz for el in rev_matching[n]]
+                nbrs = [gpm[n] for n in nnz]
+                fake_adj[i, nbrs] = 1
+            # Set diagonals 0
+            for i in range(num_pred):
+                fake_adj[i, i] = 0
 
             # Bookkeeping
             i += 1
-            data = {"local": local, "gt": future, "predicted": predicted, "loss": lss}
-            # savemat("{}/{}.mat".format(LOG_DIR, n), data)
+            data = {
+                "local": local, 
+                "gt": future, 
+                "predicted": predicted, 
+                "loss": lss, 
+                "fake_adj": fake_adj
+            }
+            savemat("{}/{}.mat".format(LOG_DIR, n), data)
         print(
             "Iters: {}, Total loss: {:.6f}, Total consistency loss: {:.6f}".format(
                 i, total_loss / i, total_consistency_loss / i
