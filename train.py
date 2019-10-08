@@ -57,7 +57,10 @@ parser.add_argument(
     "--batch_size", type=int, default=1, help="Batch Size during training [default: 32]"
 )
 parser.add_argument(
-    "--surface_loss_wt", type=float, default=1, help="Weight for surface loss from GAE"
+    "--surface_loss_wt", type=float, default=1e-1, help="Weight for surface loss from GAE"
+)
+parser.add_argument(
+    "--epochs_to_wait", type=float, default=2, help="Epochs to wait before turning on the GAE loss"
 )
 parser.add_argument(
     "--weight_decay",
@@ -157,6 +160,17 @@ def get_learning_rate(batch):
     )
     learing_rate = tf.maximum(learning_rate, 0.00001)  # CLIP THE LEARNING RATE!
     return learning_rate
+
+
+def get_surface_loss_wt(global_step):
+    num_files = get_num_files("train")              # set manually for now
+    num_batches = old_div(num_files, BATCH_SIZE)
+    batches_to_wait = FLAGS.epochs_to_wait * num_batches
+    surface_loss_wt = tf.cond(
+            global_step < batches_to_wait, 
+            lambda: tf.cast(0, tf.float32), 
+            lambda: tf.cast(FLAGS.surface_loss_wt, tf.float32))
+    return surface_loss_wt
 
 
 def get_bn_decay(batch):
@@ -283,6 +297,9 @@ def train():
             }
 
             lr = get_learning_rate(global_step)
+            surface_loss_wt = get_surface_loss_wt(global_step)
+            tf.summary.scalar("hyperparm/learning_rate", lr)
+            tf.summary.scalar("hyperparm/surface_loss_wt", surface_loss_wt)
             """
             Use lower level ops to optimize Generator
             1. Compute gradient of G_loss wrt pred_pc = dLdP
@@ -290,12 +307,12 @@ def train():
             3. Apply gradient manually
             """
             dLdP = tf.gradients(feature_loss, fake_features_pl)
-            dLdG = tf.gradients(pred, G_vars, grad_ys=dLdP) * FLAGS.surface_loss_wt
+            dLdG = tf.gradients(pred, G_vars, grad_ys=dLdP)
             dLdG_matching = tf.gradients(matching_loss, G_vars)  # Chamfer/EMD
             G_opt_ops = [
                 tf.assign(
                     var,
-                    var - lr * (tf.clip_by_norm(grad1, 1) + tf.clip_by_norm(grad2, 1)),
+                    var - tf.clip_by_norm(lr * (grad2 + surface_loss_wt * grad1), 1),
                 )
                 for (var, grad1, grad2) in zip(G_vars, dLdG, dLdG_matching)
             ]
