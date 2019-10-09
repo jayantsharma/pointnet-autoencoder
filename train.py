@@ -111,6 +111,8 @@ FLAGS = parser.parse_args()
 EPOCH_CNT = 0
 
 BATCH_SIZE = FLAGS.batch_size
+NUM_PARTIAL = 553
+NUM_PRED = 768
 NUM_POINT = FLAGS.num_point
 MAX_EPOCH = FLAGS.max_epoch
 BASE_LEARNING_RATE = FLAGS.learning_rate
@@ -207,16 +209,14 @@ def construct_feed_dict(features, support, placeholders):
 
 def train():
     with tf.Graph().as_default():
-        num_partial = 553
-        num_pred = 768
         partial, complete, features, adj_orig, _, adj_norm, nums = input_pipeline(
             "train"
         )
         adj_orig_dense = tf.sparse.to_dense(adj_orig)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
-            partial_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE, num_partial, 3))
-            complete_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE, num_pred, 3))
+            partial_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE, NUM_PARTIAL, 3))
+            complete_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE, NUM_PRED, 3))
             is_training_pl = tf.placeholder(tf.bool, shape=())
 
             # Note the global_step=batch parameter to minimize.
@@ -246,8 +246,8 @@ def train():
             )
 
             # Define GAE placeholders
-            real_features_pl = tf.placeholder(tf.float32, shape=(num_pred, 3))
-            fake_features_pl = tf.placeholder(tf.float32, shape=(num_pred, 3))
+            real_features_pl = tf.placeholder(tf.float32, shape=(NUM_PRED, 3))
+            fake_features_pl = tf.placeholder(tf.float32, shape=(NUM_PRED, 3))
             real_adj_norm_pl = tf.sparse_placeholder(tf.float32)
             fake_adj_norm_pl = tf.sparse_placeholder(tf.float32)
             dropout = tf.placeholder_with_default(0.0, shape=())
@@ -274,8 +274,8 @@ def train():
             ).embeddings
 
             # Feature reconstruction loss
-            pred_gt_matching.set_shape([BATCH_SIZE, num_pred])
-            gt_pred_matching.set_shape([BATCH_SIZE, num_pred])
+            pred_gt_matching.set_shape([BATCH_SIZE, NUM_PRED])
+            gt_pred_matching.set_shape([BATCH_SIZE, NUM_PRED])
             match_Dfake = tf.gather(Dfake, tf.squeeze(pred_gt_matching, 0))
             match_Dreal = tf.gather(Dreal, tf.squeeze(gt_pred_matching, 0))
             feature_loss = 0.5 * tf.add(
@@ -315,21 +315,21 @@ def train():
             with tf.control_dependencies(G_opt_ops):
                 G_opt_op = tf.assign(global_step, global_step + 1)
 
-            # Gradient summaries
-            gradient_sum = []
-            for op in dLdG:
-                gradient_sum.append(
-                    tf.summary.histogram(
-                        "/".join(["gradients", *op.name.split("/")[1:], "graph"]), op
-                    )
-                )
-            for op in dLdG_matching:
-                gradient_sum.append(
-                    tf.summary.histogram(
-                        "/".join(["gradients", *op.name.split("/")[1:], "matching"]), op
-                    )
-                )
-            gradient_sum = tf.summary.merge(gradient_sum)
+            # # Gradient summaries
+            # gradient_sum = []
+            # for op in dLdG:
+            #     gradient_sum.append(
+            #         tf.summary.histogram(
+            #             "/".join(["gradients", *op.name.split("/")[1:], "graph"]), op
+            #         )
+            #     )
+            # for op in dLdG_matching:
+            #     gradient_sum.append(
+            #         tf.summary.histogram(
+            #             "/".join(["gradients", *op.name.split("/")[1:], "matching"]), op
+            #         )
+            #     )
+            # gradient_sum = tf.summary.merge(gradient_sum)
 
             # loss_wt = get_consistency_loss_wt(global_step)
             # tf.summary.scalar("losses/wt", loss_wt)
@@ -398,8 +398,8 @@ def train():
                 Run input pipeline to get gt
                 Required to pass gt as placeholder because Generator backprop is not done in same session call as forward pass
                 """
-                prtl, cmplt, real_ftrs, adj, real_adj_norm = sess.run(
-                    [partial, complete, features, adj_orig_dense, adj_norm]
+                prtl, cmplt, real_ftrs, adj, real_adj_norm, n = sess.run(
+                    [partial, complete, features, adj_orig_dense, adj_norm, nums]
                 )
                 prtl = np.expand_dims(prtl, 0)
                 cmplt = np.expand_dims(cmplt, 0)
@@ -433,14 +433,14 @@ def train():
                 # rev_matching = defaultdict(list)
                 # for k, v in enumerate(pgm):
                 #     rev_matching[v].append(k)
-                fake_adj = np.zeros((num_pred, num_pred))
+                fake_adj = np.zeros((NUM_PRED, NUM_PRED))
                 for i, row in enumerate(adj[pgm, :]):
                     nnz = np.nonzero(row)[0]
                     # nbrs = [el for n in nnz for el in rev_matching[n]]
                     nbrs = [gpm[n] for n in nnz]
                     fake_adj[i, nbrs] = 1
                 # Set diagonals 0
-                for i in range(num_pred):
+                for i in range(NUM_PRED):
                     fake_adj[i, i] = 0
                 fake_adj_norm = preprocess_adj(fake_adj)
 
@@ -485,8 +485,9 @@ def get_num_files(split):
 
 
 def eval():
+    split = "test"
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, _, adj_sp, _, _, nums = input_pipeline("test")
+        pointclouds_pl, labels_pl, _, adj_sp, _, _, nums = input_pipeline(split)
         adj_dense = tf.sparse.to_dense(adj_sp)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
@@ -508,7 +509,7 @@ def eval():
             consistency_loss = MODEL.get_plane_consistency_loss(pred)
 
         # Add ops to save and restore all the variables.
-        saver = tf.train.Saver(keep_checkpoint_every_n_hours=0.5)
+        saver = tf.train.Saver()
 
         # Create a session
         config = tf.ConfigProto()
@@ -524,11 +525,11 @@ def eval():
         # sess.run(init, {is_training_pl:True})
 
         total_consistency_loss = 0
-        total_loss = 0
-        num_files = get_num_files("train")
-        # i = 0
+        losses = [] 
+        num_files = get_num_files(split)
+        k = 0
         # while True:
-        for i in tqdm(range(1000)):
+        for _ in tqdm(range(100)):
             # try:
             local, future, predicted, lss, clss, ns, pgm, gpm, adj = sess.run(
                 [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums, pred_gt_matching, gt_pred_matching, adj_dense],
@@ -538,24 +539,23 @@ def eval():
             future = np.squeeze(future)
             predicted = np.squeeze(predicted)
             n = ns[0]
-            total_loss += lss
+            losses.append(lss)
             total_consistency_loss += clss
             pgm = np.squeeze(pgm, 0)
             gpm = np.squeeze(gpm, 0)
 
-            num_pred = 768
-            fake_adj = np.zeros((num_pred, num_pred))
+            fake_adj = np.zeros((NUM_PRED, NUM_PRED))
             for i, row in enumerate(adj[pgm, :]):
                 nnz = np.nonzero(row)[0]
                 # nbrs = [el for n in nnz for el in rev_matching[n]]
                 nbrs = [gpm[n] for n in nnz]
                 fake_adj[i, nbrs] = 1
             # Set diagonals 0
-            for i in range(num_pred):
+            for i in range(NUM_PRED):
                 fake_adj[i, i] = 0
 
             # Bookkeeping
-            i += 1
+            k += 1
             data = {
                 "local": local, 
                 "gt": future, 
@@ -566,7 +566,7 @@ def eval():
             savemat("{}/{}.mat".format(LOG_DIR, n), data)
         print(
             "Iters: {}, Total loss: {:.6f}, Total consistency loss: {:.6f}".format(
-                i, total_loss / i, total_consistency_loss / i
+                k, sum(losses) / k, total_consistency_loss / k
             )
         )
 
@@ -666,6 +666,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 
 if __name__ == "__main__":
-    train()
-    # eval()
+    # train()
+    eval()
     LOG_FOUT.close()
