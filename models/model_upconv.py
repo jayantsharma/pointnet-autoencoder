@@ -38,6 +38,7 @@ def get_model(point_cloud, is_training, bn_decay=None):
         net: TF tensor BxNx3, reconstructed point clouds
         end_points: dict
     """
+    bn = False
     batch_size = point_cloud.get_shape()[0].value
     num_point = point_cloud.get_shape()[1].value
     # assert(num_point==2048)
@@ -50,39 +51,39 @@ def get_model(point_cloud, is_training, bn_decay=None):
     print("Input: {}".format(input_image.shape))
     net = tf_util.conv2d(input_image, 64, [1,point_dim],
                          padding='VALID', stride=[1,1],
-                         bn=True, is_training=is_training,
+                         bn=bn, is_training=is_training,
                          scope='conv1', bn_decay=bn_decay)
     net = tf_util.conv2d(net, 64, [1,1],
                          padding='VALID', stride=[1,1],
-                         bn=True, is_training=is_training,
+                         bn=bn, is_training=is_training,
                          scope='conv2', bn_decay=bn_decay)
     point_feat = tf_util.conv2d(net, 64, [1,1],
                          padding='VALID', stride=[1,1],
-                         bn=True, is_training=is_training,
+                         bn=bn, is_training=is_training,
                          scope='conv3', bn_decay=bn_decay)
     net = tf_util.conv2d(point_feat, 128, [1,1],
                          padding='VALID', stride=[1,1],
-                         bn=True, is_training=is_training,
+                         bn=bn, is_training=is_training,
                          scope='conv4', bn_decay=bn_decay)
     net = tf_util.conv2d(net, 1024, [1,1],
                          padding='VALID', stride=[1,1],
-                         bn=True, is_training=is_training,
+                         bn=bn, is_training=is_training,
                          scope='conv5', bn_decay=bn_decay)
     global_feat = tf_util.max_pool2d(net, [num_point,1],
                                      padding='VALID', scope='maxpool')
 
     print("Global Descriptor: {}".format(global_feat.shape))
     net = tf.squeeze(global_feat, axis=[1,2])
-    net = tf_util.fully_connected(net, 1024, bn=True, is_training=is_training, scope='fc00', bn_decay=bn_decay)
+    net = tf_util.fully_connected(net, 1024, bn=bn, is_training=is_training, scope='fc00', bn_decay=bn_decay)
 
     end_points['embedding'] = net
 
     # UPCONV Decoder
     net = tf.reshape(net, [-1, 1, 1, 1024])
-    net = tf_util.conv2d_transpose(net, 512, kernel_size=[2,2], stride=[1,1], padding='VALID', scope='upconv1', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 256, kernel_size=[3,3], stride=[2,2], padding='VALID', scope='upconv2', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 128, kernel_size=[3,3], stride=[2,2], padding='VALID', scope='upconv3', bn=True, bn_decay=bn_decay, is_training=is_training)
-    net = tf_util.conv2d_transpose(net, 64, kernel_size=[4,5], stride=[2,3], padding='VALID', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 512, kernel_size=[2,2], stride=[1,1], padding='VALID', scope='upconv1', bn=bn, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 256, kernel_size=[3,3], stride=[2,2], padding='VALID', scope='upconv2', bn=bn, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 128, kernel_size=[3,3], stride=[2,2], padding='VALID', scope='upconv3', bn=bn, bn_decay=bn_decay, is_training=is_training)
+    net = tf_util.conv2d_transpose(net, 64, kernel_size=[4,5], stride=[2,3], padding='VALID', scope='upconv4', bn=bn, bn_decay=bn_decay, is_training=is_training)
     net = tf_util.conv2d_transpose(net, 3, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv5', activation_fn=None)
     net = net[:,:,:32,:]
     end_points['xyzmap'] = net
