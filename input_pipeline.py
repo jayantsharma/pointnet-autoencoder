@@ -94,7 +94,7 @@ def preprocess(feat, label, fname_bytes):
     return feat, label, fname_bytes
 
 
-def input_pipeline(split):
+def input_pipeline(split, batch_size):
     files = tf.data.Dataset.list_files(os.path.join(ROOT, split + ".tfrecord"))
     dataset = tf.data.TFRecordDataset(files)
     if split == "train":
@@ -103,15 +103,15 @@ def input_pipeline(split):
         dataset = dataset.shuffle(buffer_size=5000)
     dataset = dataset.map(_parse_example, num_parallel_calls=2)
     # dataset = dataset.map(preprocess, num_parallel_calls=2)
-    # dataset = dataset.batch(batch_size)
+    dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(buffer_size=100)
     iterator = dataset.make_one_shot_iterator()
     prtl, cmplt, ftrs, adj_orig, adj_label, adj_norm, nums = iterator.get_next()
 
     # Set shapes - makes life easy
-    prtl.set_shape([553, 3])
-    cmplt.set_shape([768, 3])
-    ftrs.set_shape([768, 3])
+    prtl.set_shape([batch_size, 553, 3])
+    cmplt.set_shape([batch_size, 768, 3])
+    ftrs.set_shape([batch_size, 768, 3])
 
     return prtl, cmplt, ftrs, adj_orig, adj_label, adj_norm, nums
 

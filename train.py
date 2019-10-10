@@ -8,6 +8,7 @@ import math
 from datetime import datetime
 import h5py
 import numpy as np
+import scipy.sparse as sp
 import tensorflow as tf
 import socket
 import importlib
@@ -210,9 +211,9 @@ def construct_feed_dict(features, support, placeholders):
 def train():
     with tf.Graph().as_default():
         partial, complete, features, adj_orig, _, adj_norm, nums = input_pipeline(
-            "train"
+            "train", BATCH_SIZE
         )
-        adj_orig_dense = tf.sparse.to_dense(adj_orig)
+        # adj_orig_dense = tf.sparse.to_dense(adj_orig)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
             partial_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE, NUM_PARTIAL, 3))
@@ -245,9 +246,13 @@ def train():
                 "NN/median_dup", tf.contrib.distributions.percentile(unique_counts, 50)
             )
 
-            # Define GAE placeholders
-            real_features_pl = tf.placeholder(tf.float32, shape=(NUM_PRED, 3))
-            fake_features_pl = tf.placeholder(tf.float32, shape=(NUM_PRED, 3))
+            """
+            Define GAE placeholders
+            NOTE the vertical stacking required to make batched input work. 
+            So we'll need to reshape the point cloud input before feeding it to GAE and reshape gradients likewise.
+            """
+            real_features_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE*NUM_PRED, 3))
+            fake_features_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE*NUM_PRED, 3))
             real_adj_norm_pl = tf.sparse_placeholder(tf.float32)
             fake_adj_norm_pl = tf.sparse_placeholder(tf.float32)
             dropout = tf.placeholder_with_default(0.0, shape=())
@@ -276,8 +281,9 @@ def train():
             # Feature reconstruction loss
             pred_gt_matching.set_shape([BATCH_SIZE, NUM_PRED])
             gt_pred_matching.set_shape([BATCH_SIZE, NUM_PRED])
-            match_Dfake = tf.gather(Dfake, tf.squeeze(pred_gt_matching, 0))
-            match_Dreal = tf.gather(Dreal, tf.squeeze(gt_pred_matching, 0))
+            offsets = np.arange(BATCH_SIZE).repeat(NUM_PRED)    # Offsets into batch needed because of vstacking
+            match_Dfake = tf.gather(Dfake, offsets + tf.reshape(gt_pred_matching, [-1]))
+            match_Dreal = tf.gather(Dreal, offsets + tf.reshape(pred_gt_matching, [-1]))
             feature_loss = 0.5 * tf.add(
                 tf.losses.mean_squared_error(Dreal, match_Dfake),
                 tf.losses.mean_squared_error(match_Dreal, Dfake),
@@ -303,6 +309,7 @@ def train():
             3. Apply gradient manually
             """
             dLdP = tf.gradients(feature_loss, fake_features_pl)
+            dLdP[0] = tf.reshape(dLdP[0], [BATCH_SIZE, NUM_PRED, 3])
             dLdG = tf.gradients(pred, G_vars, grad_ys=dLdP)
             dLdG_matching = tf.gradients(matching_loss, G_vars)  # Chamfer/EMD
             G_opt_ops = [
@@ -398,11 +405,9 @@ def train():
                 Run input pipeline to get gt
                 Required to pass gt as placeholder because Generator backprop is not done in same session call as forward pass
                 """
-                prtl, cmplt, real_ftrs, adj, real_adj_norm, n = sess.run(
-                    [partial, complete, features, adj_orig_dense, adj_norm, nums]
+                prtl, cmplt, real_ftrs, adjs, real_adj_norm = sess.run(
+                    [partial, complete, features, adj_orig, adj_norm]
                 )
-                prtl = np.expand_dims(prtl, 0)
-                cmplt = np.expand_dims(cmplt, 0)
 
                 """
                 STEP 2
@@ -416,10 +421,6 @@ def train():
                         complete_pl: cmplt,
                     },
                 )
-                # Cut out the batch dim
-                fake_ftrs = np.squeeze(pred_pc, 0)
-                pgm = np.squeeze(pgm)
-                gpm = np.squeeze(gpm)
 
                 """ 
                 Use Pred -> GT NN matching to induce graph on pred pc
@@ -433,16 +434,28 @@ def train():
                 # rev_matching = defaultdict(list)
                 # for k, v in enumerate(pgm):
                 #     rev_matching[v].append(k)
-                fake_adj = np.zeros((NUM_PRED, NUM_PRED))
-                for i, row in enumerate(adj[pgm, :]):
-                    nnz = np.nonzero(row)[0]
-                    # nbrs = [el for n in nnz for el in rev_matching[n]]
-                    nbrs = [gpm[n] for n in nnz]
-                    fake_adj[i, nbrs] = 1
-                # Set diagonals 0
-                for i in range(NUM_PRED):
-                    fake_adj[i, i] = 0
-                fake_adj_norm = preprocess_adj(fake_adj)
+                fake_adj_norms = []
+                ipdb.set_trace()    # Need to check size of adjs matrix here
+                for b in range(BATCH_SIZE):
+                    adj = tf.sparse.to_dense(adjs[b])
+                    fake_adj = np.zeros((NUM_PRED, NUM_PRED))
+                    for i, row in enumerate(adj[pgm[b], :]):
+                        nnz = np.nonzero(row)[0]
+                        # nbrs = [el for n in nnz for el in rev_matching[n]]
+                        nbrs = [gpm[b][n] for n in nnz]
+                        fake_adj[i, nbrs] = 1
+                    # Set diagonals 0
+                    for i in range(NUM_PRED):
+                        fake_adj[i, i] = 0
+                    fake_adj_norm = preprocess_adj(fake_adj)
+                    fake_adj_norms.append(fake_adj_norm)
+
+                # Vertical stack: 3-dim to 2-dim
+                real_ftrs = np.reshape(real_ftrs, [BATCH_SIZE*NUM_PRED, 3])
+                fake_ftrs = np.reshape(pred_pc, [BATCH_SIZE*NUM_PRED, 3])
+                # Block diagonalize adjacency matrices
+                fake_adj_norms = sp.block_diag(fake_adj_norms)
+                real_adj_norms = sp.block_diag(real_adj_norm)
 
                 """
                 STEP 3
@@ -453,9 +466,9 @@ def train():
                     partial_pl: prtl,
                     complete_pl: cmplt,
                     real_features_pl: real_ftrs,
-                    real_adj_norm_pl: real_adj_norm,
+                    real_adj_norm_pl: real_adj_norms,
                     fake_features_pl: fake_ftrs,
-                    fake_adj_norm_pl: fake_adj_norm,
+                    fake_adj_norm_pl: fake_adj_norms,
                     dropout: FLAGS.dropout,
                 }
                 _, summary = sess.run([G_opt_op, summary_op], feed_dict=feed_dict)
@@ -666,6 +679,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 
 if __name__ == "__main__":
-    # train()
-    eval()
+    train()
+    # eval()
     LOG_FOUT.close()
