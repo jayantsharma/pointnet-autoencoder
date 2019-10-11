@@ -38,7 +38,7 @@ def get_model(point_cloud, is_training, bn_decay=None):
         net: TF tensor BxNx3, reconstructed point clouds
         end_points: dict
     """
-    bn = False
+    bn = True
     batch_size = point_cloud.get_shape()[0].value
     num_point = point_cloud.get_shape()[1].value
     # assert(num_point==2048)

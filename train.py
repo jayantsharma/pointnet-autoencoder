@@ -39,7 +39,7 @@ from gae.model import GCNModelAE, GCNModelVAE
 from gae.layers import reset_graphconvolution_uid
 
 sys.path.append(os.path.join(ROOT_DIR, "/home/jayant/gcn"))
-from gcn.utils import preprocess_features, preprocess_adj
+from gcn.utils import preprocess_features, preprocess_adj_notuple, sparse_to_tuple, sparse_tensor_value_to_spmatrix, batch_adjs, sparse_tensor_value_to_dense
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--gpu", type=int, default=0, help="GPU to use [default: GPU 0]")
@@ -58,10 +58,16 @@ parser.add_argument(
     "--batch_size", type=int, default=1, help="Batch Size during training [default: 32]"
 )
 parser.add_argument(
-    "--surface_loss_wt", type=float, default=1e-1, help="Weight for surface loss from GAE"
+    "--surface_loss_wt",
+    type=float,
+    default=1e-1,
+    help="Weight for surface loss from GAE",
 )
 parser.add_argument(
-    "--epochs_to_wait", type=float, default=2, help="Epochs to wait before turning on the GAE loss"
+    "--epochs_to_wait",
+    type=int,
+    default=2,
+    help="Epochs to wait before turning on the GAE loss",
 )
 parser.add_argument(
     "--weight_decay",
@@ -166,17 +172,19 @@ def get_learning_rate(batch):
 
 
 def get_surface_loss_wt(global_step):
-    num_files = get_num_files("train")              # set manually for now
+    num_files = get_num_files("train")  # set manually for now
     num_batches = old_div(num_files, BATCH_SIZE)
     batches_to_wait = FLAGS.epochs_to_wait * num_batches
     surface_loss_wt = tf.cond(
-            global_step < batches_to_wait, 
-            lambda: tf.cast(0, tf.float32), 
-            lambda: tf.cast(FLAGS.surface_loss_wt, tf.float32))
+        global_step < batches_to_wait,
+        lambda: tf.cast(0, tf.float32),
+        lambda: tf.cast(FLAGS.surface_loss_wt, tf.float32),
+    )
     return surface_loss_wt
 
 
 def get_bn_decay(batch):
+    # return BN_DECAY_CLIP
     bn_momentum = tf.train.exponential_decay(
         BN_INIT_DECAY,
         batch * BATCH_SIZE,
@@ -210,10 +218,17 @@ def construct_feed_dict(features, support, placeholders):
 
 def train():
     with tf.Graph().as_default():
-        partial, complete, features, adj_orig, _, adj_norm, nums = input_pipeline(
+        partial, complete, features, _, _, adj_norm, nums = input_pipeline(
             "train", BATCH_SIZE
         )
         # adj_orig_dense = tf.sparse.to_dense(adj_orig)
+        # adj_norm_dense = tf.sparse.to_dense(adj_norm)
+        # adj_orig_splits = tf.sparse.split(
+        #     sp_input=adj_orig, num_split=BATCH_SIZE, axis=0
+        # )
+        adj_norm_splits = tf.sparse.split(
+            sp_input=adj_norm, num_split=BATCH_SIZE, axis=0
+        )
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
             partial_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE, NUM_PARTIAL, 3))
@@ -251,8 +266,12 @@ def train():
             NOTE the vertical stacking required to make batched input work. 
             So we'll need to reshape the point cloud input before feeding it to GAE and reshape gradients likewise.
             """
-            real_features_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE*NUM_PRED, 3))
-            fake_features_pl = tf.placeholder(tf.float32, shape=(BATCH_SIZE*NUM_PRED, 3))
+            real_features_pl = tf.placeholder(
+                tf.float32, shape=(BATCH_SIZE * NUM_PRED, 3)
+            )
+            fake_features_pl = tf.placeholder(
+                tf.float32, shape=(BATCH_SIZE * NUM_PRED, 3)
+            )
             real_adj_norm_pl = tf.sparse_placeholder(tf.float32)
             fake_adj_norm_pl = tf.sparse_placeholder(tf.float32)
             dropout = tf.placeholder_with_default(0.0, shape=())
@@ -281,7 +300,9 @@ def train():
             # Feature reconstruction loss
             pred_gt_matching.set_shape([BATCH_SIZE, NUM_PRED])
             gt_pred_matching.set_shape([BATCH_SIZE, NUM_PRED])
-            offsets = np.arange(BATCH_SIZE).repeat(NUM_PRED)    # Offsets into batch needed because of vstacking
+            offsets = np.arange(BATCH_SIZE).repeat(
+                NUM_PRED
+            )  # Offsets into batch needed because of vstacking
             match_Dfake = tf.gather(Dfake, offsets + tf.reshape(gt_pred_matching, [-1]))
             match_Dreal = tf.gather(Dreal, offsets + tf.reshape(pred_gt_matching, [-1]))
             feature_loss = 0.5 * tf.add(
@@ -405,8 +426,8 @@ def train():
                 Run input pipeline to get gt
                 Required to pass gt as placeholder because Generator backprop is not done in same session call as forward pass
                 """
-                prtl, cmplt, real_ftrs, adjs, real_adj_norm = sess.run(
-                    [partial, complete, features, adj_orig, adj_norm]
+                prtl, cmplt, real_ftrs, real_adj_norms = sess.run(
+                    [partial, complete, features, adj_norm_splits]
                 )
 
                 """
@@ -435,27 +456,37 @@ def train():
                 # for k, v in enumerate(pgm):
                 #     rev_matching[v].append(k)
                 fake_adj_norms = []
-                ipdb.set_trace()    # Need to check size of adjs matrix here
                 for b in range(BATCH_SIZE):
-                    adj = tf.sparse.to_dense(adjs[b])
+                    # adj = sparse_tensor_value_to_dense(real_adj_norms[b])
+                    adj_list = [ [] for _ in range(NUM_PRED) ]  # defaultdict(list)
+                    coords = real_adj_norms[b][0]
+                    for (_,r,c) in coords:
+                        adj_list[r].append(c)
                     fake_adj = np.zeros((NUM_PRED, NUM_PRED))
-                    for i, row in enumerate(adj[pgm[b], :]):
-                        nnz = np.nonzero(row)[0]
+                    # for i, row in enumerate(adj[pgm[b], :]):
+                        # nnz = np.nonzero(row)[0]
                         # nbrs = [el for n in nnz for el in rev_matching[n]]
+                    for i in range(NUM_PRED):
+                        nnz = adj_list[pgm[b][i]]
                         nbrs = [gpm[b][n] for n in nnz]
                         fake_adj[i, nbrs] = 1
                     # Set diagonals 0
                     for i in range(NUM_PRED):
                         fake_adj[i, i] = 0
-                    fake_adj_norm = preprocess_adj(fake_adj)
+                    fake_adj_norm = preprocess_adj_notuple(fake_adj)
                     fake_adj_norms.append(fake_adj_norm)
 
-                # Vertical stack: 3-dim to 2-dim
-                real_ftrs = np.reshape(real_ftrs, [BATCH_SIZE*NUM_PRED, 3])
-                fake_ftrs = np.reshape(pred_pc, [BATCH_SIZE*NUM_PRED, 3])
                 # Block diagonalize adjacency matrices
-                fake_adj_norms = sp.block_diag(fake_adj_norms)
-                real_adj_norms = sp.block_diag(real_adj_norm)
+                real_adj_norms = [
+                        sparse_tensor_value_to_spmatrix(real_adj_norm)
+                        for real_adj_norm in real_adj_norms
+                        ]
+                real_adj_norms = batch_adjs(real_adj_norms)
+                fake_adj_norms = batch_adjs(fake_adj_norms)
+
+                # Vertical stack: 3-dim to 2-dim
+                real_ftrs = np.reshape(real_ftrs, [BATCH_SIZE * NUM_PRED, 3])
+                fake_ftrs = np.reshape(pred_pc, [BATCH_SIZE * NUM_PRED, 3])
 
                 """
                 STEP 3
@@ -500,7 +531,7 @@ def get_num_files(split):
 def eval():
     split = "test"
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, _, adj_sp, _, _, nums = input_pipeline(split)
+        pointclouds_pl, labels_pl, _, adj_sp, _, _, nums = input_pipeline(split, 1)
         adj_dense = tf.sparse.to_dense(adj_sp)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
@@ -514,10 +545,10 @@ def eval():
             # # Get model and loss
             with tf.variable_scope("generator"):
                 pred, end_points = MODEL.get_model(
-                    tf.expand_dims(pointclouds_pl, 0), is_training_pl, bn_decay=bn_decay
+                    pointclouds_pl, is_training_pl, bn_decay=bn_decay
                 )
             loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(
-                pred, tf.expand_dims(labels_pl, 0), end_points
+                pred, labels_pl, end_points
             )
             consistency_loss = MODEL.get_plane_consistency_loss(pred)
 
@@ -538,26 +569,37 @@ def eval():
         # sess.run(init, {is_training_pl:True})
 
         total_consistency_loss = 0
-        losses = [] 
+        losses = []
         num_files = get_num_files(split)
         k = 0
         # while True:
         for _ in tqdm(range(100)):
             # try:
             local, future, predicted, lss, clss, ns, pgm, gpm, adj = sess.run(
-                [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums, pred_gt_matching, gt_pred_matching, adj_dense],
+                [
+                    pointclouds_pl,
+                    labels_pl,
+                    pred,
+                    loss,
+                    consistency_loss,
+                    nums,
+                    pred_gt_matching,
+                    gt_pred_matching,
+                    adj_dense,
+                ],
                 feed_dict={is_training_pl: False},
             )
             local = np.squeeze(local)
             future = np.squeeze(future)
             predicted = np.squeeze(predicted)
-            n = ns[0]
+            n = ns[0][0]
             losses.append(lss)
             total_consistency_loss += clss
             pgm = np.squeeze(pgm, 0)
             gpm = np.squeeze(gpm, 0)
 
             fake_adj = np.zeros((NUM_PRED, NUM_PRED))
+            adj = np.squeeze(adj, 0)
             for i, row in enumerate(adj[pgm, :]):
                 nnz = np.nonzero(row)[0]
                 # nbrs = [el for n in nnz for el in rev_matching[n]]
@@ -570,11 +612,11 @@ def eval():
             # Bookkeeping
             k += 1
             data = {
-                "local": local, 
-                "gt": future, 
-                "predicted": predicted, 
-                "loss": lss, 
-                "fake_adj": fake_adj
+                "local": local,
+                "gt": future,
+                "predicted": predicted,
+                "loss": lss,
+                "fake_adj": fake_adj,
             }
             savemat("{}/{}.mat".format(LOG_DIR, n), data)
         print(
@@ -679,6 +721,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 
 if __name__ == "__main__":
-    train()
-    # eval()
+    # train()
+    eval()
     LOG_FOUT.close()
