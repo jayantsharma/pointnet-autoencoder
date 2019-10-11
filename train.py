@@ -279,7 +279,7 @@ def get_num_files(split):
 
 def eval():
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, adj_pl, nums = input_pipeline('test', 1)
+        pointclouds_pl, labels_pl, adj_pl, nums = input_pipeline('test_sample', 1)
         adj_dense = tf.sparse.to_dense(adj_pl)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
@@ -318,7 +318,7 @@ def eval():
         num_files = get_num_files('train')
         # i = 0
         # while True:
-        for i in tqdm(range(1000)):
+        for i in tqdm(range(100)):
             # try:
             local, future, predicted, lss, clss, ns, pgm, gpm, adj = sess.run(
                 [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums, pred_gt_matching, gt_pred_matching, adj_dense],
