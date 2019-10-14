@@ -279,7 +279,7 @@ def get_num_files(split):
 
 def eval():
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, adj_pl, nums = input_pipeline('test_sample', 1)
+        pointclouds_pl, labels_pl, adj_pl, nums = input_pipeline('test', 1)
         adj_dense = tf.sparse.to_dense(adj_pl)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
