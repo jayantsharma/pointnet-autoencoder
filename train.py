@@ -171,9 +171,10 @@ def train():
 
             print("--- Get model and loss")
             # Get model and loss
-            pred, end_points = MODEL.get_model(
-                pointclouds_pl, is_training_pl, bn_decay=bn_decay
-            )
+            with tf.variable_scope('generator'):
+                pred, end_points = MODEL.get_model(
+                    pointclouds_pl, is_training_pl, bn_decay=bn_decay
+                )
             """
             The loss is composed of 2 parts:
             1. Matching distribution loss imposed between predicted and target point clouds via Chamfer or EMD
@@ -442,6 +443,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 if __name__ == "__main__":
     log_string("pid: %s" % (str(os.getpid())))
-    # train()
+    train()
     eval()
     LOG_FOUT.close()
