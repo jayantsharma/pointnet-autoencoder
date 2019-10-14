@@ -291,9 +291,10 @@ def eval():
             bn_decay = get_bn_decay(batch)
 
             # # Get model and loss
-            pred, end_points = MODEL.get_model(
-                pointclouds_pl, is_training_pl, bn_decay=bn_decay
-            )
+            with tf.variable_scope('generator'):
+                pred, end_points = MODEL.get_model(
+                    pointclouds_pl, is_training_pl, bn_decay=bn_decay
+                )
             loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(pred, labels_pl, end_points)
             consistency_loss = MODEL.get_plane_consistency_loss(pred)
 
