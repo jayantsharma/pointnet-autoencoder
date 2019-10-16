@@ -39,7 +39,14 @@ from gae.model import GCNModelAE, GCNModelVAE
 from gae.layers import reset_graphconvolution_uid
 
 sys.path.append(os.path.join(ROOT_DIR, "/home/jayant/gcn"))
-from gcn.utils import preprocess_features, preprocess_adj_notuple, sparse_to_tuple, sparse_tensor_value_to_spmatrix, batch_adjs, sparse_tensor_value_to_dense
+from gcn.utils import (
+    preprocess_features,
+    preprocess_adj_notuple,
+    sparse_to_tuple,
+    sparse_tensor_value_to_spmatrix,
+    batch_adjs,
+    sparse_tensor_value_to_dense,
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--gpu", type=int, default=0, help="GPU to use [default: GPU 0]")
@@ -336,7 +343,7 @@ def train():
             G_opt_ops = [
                 tf.assign(
                     var,
-                    var - tf.clip_by_norm(lr * (grad2 + surface_loss_wt * grad1), 1),
+                    var - tf.clip_by_norm(lr * (surface_loss_wt * grad1), 1),
                 )
                 for (var, grad1, grad2) in zip(G_vars, dLdG, dLdG_matching)
             ]
@@ -397,6 +404,12 @@ def train():
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()  # saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
         gae_restorer = tf.train.Saver(var_list=gae_keyed_var_list)
+        pcn_vars = [
+            var
+            for var in tf.get_collection(tf.GraphKeys.VARIABLES)
+            if not var.name.startswith("feature_extractor")
+        ]
+        pcn_restorer = tf.train.Saver(var_list=pcn_vars)
 
         # Init variables
         ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
@@ -409,6 +422,12 @@ def train():
             gae_restorer.restore(
                 sess, tf.train.latest_checkpoint("/home/jayant/gae/log1e3")
             )
+            # saver.save(sess, "%s/model.ckpt"%LOG_DIR, 0)
+            # ipdb.set_trace()
+            # ckpt_path = "/home/jayant/pointnet-autoencoder/log_mano_baseline_centered/model.ckpt-60"
+            # # ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/log_mano_baseline_centered")
+            # pcn_restorer.restore(sess, ckpt_path)
+            # start_epoch = int(ckpt_path.split("-")[-1]) + 1
             start_epoch = 1
 
         num_files = get_num_files("train")  # set manually for now
@@ -458,14 +477,15 @@ def train():
                 fake_adj_norms = []
                 for b in range(BATCH_SIZE):
                     # adj = sparse_tensor_value_to_dense(real_adj_norms[b])
-                    adj_list = [ [] for _ in range(NUM_PRED) ]  # defaultdict(list)
+                    adj_list = [[] for _ in range(NUM_PRED)]  # defaultdict(list)
                     coords = real_adj_norms[b][0]
-                    for (_,r,c) in coords:
-                        adj_list[r].append(c)
+                    for (_, r, c) in coords:
+                        if r != c:  # Because adj_norm has self-connectivity
+                            adj_list[r].append(c)
                     fake_adj = np.zeros((NUM_PRED, NUM_PRED))
                     # for i, row in enumerate(adj[pgm[b], :]):
-                        # nnz = np.nonzero(row)[0]
-                        # nbrs = [el for n in nnz for el in rev_matching[n]]
+                    # nnz = np.nonzero(row)[0]
+                    # nbrs = [el for n in nnz for el in rev_matching[n]]
                     for i in range(NUM_PRED):
                         nnz = adj_list[pgm[b][i]]
                         nbrs = [gpm[b][n] for n in nnz]
@@ -478,9 +498,9 @@ def train():
 
                 # Block diagonalize adjacency matrices
                 real_adj_norms = [
-                        sparse_tensor_value_to_spmatrix(real_adj_norm)
-                        for real_adj_norm in real_adj_norms
-                        ]
+                    sparse_tensor_value_to_spmatrix(real_adj_norm)
+                    for real_adj_norm in real_adj_norms
+                ]
                 real_adj_norms = batch_adjs(real_adj_norms)
                 fake_adj_norms = batch_adjs(fake_adj_norms)
 
