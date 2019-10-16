@@ -196,7 +196,7 @@ def train():
         num_partial = 553
         num_pred = 768
 
-        data = loadmat('log_mano_baseline/14090.mat')
+        data = loadmat('log_mano_baseline/1214.mat')
         # Center both clouds by the mean of gt cloud (ow they get misaligned because Chamfer opt has no notion of distribution)
         gt = data['gt']
         pred = data['predicted']
@@ -262,8 +262,8 @@ def train():
             # Feature reconstruction loss
             pred_gt_matching.set_shape([BATCH_SIZE, num_pred])
             gt_pred_matching.set_shape([BATCH_SIZE, num_pred])
-            match_Dfake = tf.gather(Dfake, tf.squeeze(pred_gt_matching, 0))
-            match_Dreal = tf.gather(Dreal, tf.squeeze(gt_pred_matching, 0))
+            match_Dfake = tf.gather(Dfake, tf.squeeze(gt_pred_matching, 0))
+            match_Dreal = tf.gather(Dreal, tf.squeeze(pred_gt_matching, 0))
             feature_loss = 0.5 * tf.add(
                 tf.losses.mean_squared_error(Dreal, match_Dfake),
                 tf.losses.mean_squared_error(match_Dreal, Dfake),
@@ -344,8 +344,8 @@ def train():
             STEP 1
             Get matching and induce graph
             """
-            gt_pc, pred_pc, pgm, gpm, lss = sess.run(
-                [gt_const, pred_var, pred_gt_matching, gt_pred_matching, matching_loss],
+            gt_pc, pred_pc, pgm, gpm, lss, emb, fake_emb = sess.run(
+                [gt_const, pred_var, pred_gt_matching, gt_pred_matching, matching_loss, Dreal, Dfake],
             )
             # Cut out the batch dim
             pred_pc = np.squeeze(pred_pc)
@@ -381,7 +381,9 @@ def train():
                 savemat('%s/%d.mat' % (LOG_DIR, epoch), { 
                     'gt': gt_pc, 
                     'pred': pred_pc, 
-                    'fake_adj': fake_adj 
+                    'fake_adj': fake_adj,
+                    'emb': emb,
+                    'fake_emb': fake_emb
                     })
                 print("Step: {}, Chamfer loss: {:.4f}".format(epoch, lss))
 
