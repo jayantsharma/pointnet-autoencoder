@@ -245,8 +245,8 @@ def train():
             # Note the global_step=batch parameter to minimize.
             # That tells the optimizer to helpfully increment the 'batch' parameter for you every time it trains.
             global_step = tf.Variable(0)
-            bn_decay = get_bn_decay(global_step)
-            tf.summary.scalar("bn_decay", bn_decay)
+            bn_decay = 1 # get_bn_decay(global_step)
+            tf.summary.scalar("hyperparam/bn_decay", bn_decay)
 
             # Predict point cloud
             with tf.variable_scope("generator"):
@@ -307,9 +307,9 @@ def train():
             # Feature reconstruction loss
             pred_gt_matching.set_shape([BATCH_SIZE, NUM_PRED])
             gt_pred_matching.set_shape([BATCH_SIZE, NUM_PRED])
-            offsets = np.arange(BATCH_SIZE).repeat(
-                NUM_PRED
-            )  # Offsets into batch needed because of vstacking
+            offsets = NUM_PRED * np.arange(BATCH_SIZE).repeat(
+                    NUM_PRED
+                    )  # Offsets into batch needed because of vstacking
             match_Dfake = tf.gather(Dfake, offsets + tf.reshape(gt_pred_matching, [-1]))
             match_Dreal = tf.gather(Dreal, offsets + tf.reshape(pred_gt_matching, [-1]))
             feature_loss = 0.5 * tf.add(
@@ -328,8 +328,8 @@ def train():
 
             lr = get_learning_rate(global_step)
             surface_loss_wt = get_surface_loss_wt(global_step)
-            tf.summary.scalar("hyperparm/learning_rate", lr)
-            tf.summary.scalar("hyperparm/surface_loss_wt", surface_loss_wt)
+            tf.summary.scalar("hyperparam/learning_rate", lr)
+            tf.summary.scalar("hyperparam/surface_loss_wt", surface_loss_wt)
             """
             Use lower level ops to optimize Generator
             1. Compute gradient of G_loss wrt pred_pc = dLdP
@@ -350,14 +350,16 @@ def train():
             with tf.control_dependencies(G_opt_ops):
                 G_opt_op = tf.assign(global_step, global_step + 1)
 
-            # # Gradient summaries
-            # gradient_sum = []
-            # for op in dLdG:
-            #     gradient_sum.append(
-            #         tf.summary.histogram(
-            #             "/".join(["gradients", *op.name.split("/")[1:], "graph"]), op
-            #         )
-            #     )
+            # Gradient summaries
+            gradient_sum = []
+            for op in dLdG:
+                gradient_sum.append(
+                    tf.summary.histogram(
+                        "/".join(["gradients", *op.name.split("/")[1:], "graph"]), op
+                    )
+                )
+            for var in G_vars:
+                tf.summary.histogram(var.name, var)
             # for op in dLdG_matching:
             #     gradient_sum.append(
             #         tf.summary.histogram(
@@ -417,18 +419,16 @@ def train():
             saver.restore(sess, ckpt_path)
             start_epoch = int(ckpt_path.split("-")[-1]) + 1
         else:
-            init = tf.global_variables_initializer()
-            sess.run(init)
+            # init = tf.global_variables_initializer()
+            # sess.run(init)
+            start_epoch = 1
+            ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/log_mano_baseline_centered")
+            pcn_restorer.restore(sess, ckpt_path)
+            # start_epoch = int(ckpt_path.split("-")[-1]) + 1
             gae_restorer.restore(
                 sess, tf.train.latest_checkpoint("/home/jayant/gae/log1e3")
             )
-            # saver.save(sess, "%s/model.ckpt"%LOG_DIR, 0)
-            # ipdb.set_trace()
-            # ckpt_path = "/home/jayant/pointnet-autoencoder/log_mano_baseline_centered/model.ckpt-60"
-            # # ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/log_mano_baseline_centered")
-            # pcn_restorer.restore(sess, ckpt_path)
-            # start_epoch = int(ckpt_path.split("-")[-1]) + 1
-            start_epoch = 1
+            sess.run(tf.assign(global_step, 0))
 
         num_files = get_num_files("train")  # set manually for now
         num_batches = old_div(num_files, BATCH_SIZE)
@@ -741,6 +741,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 
 if __name__ == "__main__":
-    # train()
+    train()
     eval()
     LOG_FOUT.close()
