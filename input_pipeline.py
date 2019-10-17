@@ -97,7 +97,7 @@ def preprocess(feat, label, fname_bytes):
 def input_pipeline(split):
     files = tf.data.Dataset.list_files(os.path.join(ROOT, split + ".tfrecord"))
     dataset = tf.data.TFRecordDataset(files)
-    if split == "train":
+    if split.startswith("train"):
         # pass
         dataset = dataset.repeat()
         dataset = dataset.shuffle(buffer_size=5000)
@@ -178,7 +178,7 @@ def normalize():
 
 
 def write_point_clouds():
-    splits = ["train", "test"]  # Read splits from files like train.list, test.list
+    splits = ["train100", "test100"]  # Read splits from files like train.list, test.list
 
     # Point index (1-based) of middle 2 fingers
     l = 357
@@ -237,9 +237,9 @@ def write_point_clouds():
 
     for split in splits:
         writer = tf.python_io.TFRecordWriter(os.path.join(ROOT, split + ".tfrecord"))
-        with open("%s.list" % split) as f:
+        with open("%s.list" % split[:-3]) as f:
             idxs = f.read().splitlines()
-        for idx in tqdm(idxs):
+        for idx in tqdm(idxs[:100]):
             s = "{}/{}.pkl".format(ROOT, idx)
             with open(s, "rb") as f:
                 data = pickle.load(f)

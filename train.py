@@ -57,10 +57,16 @@ parser.add_argument(
     "--batch_size", type=int, default=1, help="Batch Size during training [default: 32]"
 )
 parser.add_argument(
-    "--surface_loss_wt", type=float, default=1e-1, help="Weight for surface loss from GAE"
+    "--surface_loss_wt",
+    type=float,
+    default=1e-1,
+    help="Weight for surface loss from GAE",
 )
 parser.add_argument(
-    "--epochs_to_wait", type=float, default=2, help="Epochs to wait before turning on the GAE loss"
+    "--epochs_to_wait",
+    type=int,
+    default=2,
+    help="Epochs to wait before turning on the GAE loss",
 )
 parser.add_argument(
     "--weight_decay",
@@ -165,13 +171,14 @@ def get_learning_rate(batch):
 
 
 def get_surface_loss_wt(global_step):
-    num_files = get_num_files("train")              # set manually for now
+    num_files = get_num_files("train")  # set manually for now
     num_batches = old_div(num_files, BATCH_SIZE)
     batches_to_wait = FLAGS.epochs_to_wait * num_batches
     surface_loss_wt = tf.cond(
-            global_step < batches_to_wait, 
-            lambda: tf.cast(0, tf.float32), 
-            lambda: tf.cast(FLAGS.surface_loss_wt, tf.float32))
+        global_step < batches_to_wait,
+        lambda: tf.cast(0, tf.float32),
+        lambda: tf.cast(FLAGS.surface_loss_wt, tf.float32),
+    )
     return surface_loss_wt
 
 
@@ -210,7 +217,7 @@ def construct_feed_dict(features, support, placeholders):
 def train():
     with tf.Graph().as_default():
         partial, complete, features, adj_orig, _, adj_norm, nums = input_pipeline(
-            "train"
+            "train100"
         )
         adj_orig_dense = tf.sparse.to_dense(adj_orig)
 
@@ -222,8 +229,8 @@ def train():
             # Note the global_step=batch parameter to minimize.
             # That tells the optimizer to helpfully increment the 'batch' parameter for you every time it trains.
             global_step = tf.Variable(0)
-            bn_decay = get_bn_decay(global_step)
-            tf.summary.scalar("bn_decay", bn_decay)
+            bn_decay = 1  # get_bn_decay(global_step)
+            tf.summary.scalar("hyperparam/bn_decay", bn_decay)
 
             # Predict point cloud
             with tf.variable_scope("generator"):
@@ -276,8 +283,8 @@ def train():
             # Feature reconstruction loss
             pred_gt_matching.set_shape([BATCH_SIZE, NUM_PRED])
             gt_pred_matching.set_shape([BATCH_SIZE, NUM_PRED])
-            match_Dfake = tf.gather(Dfake, tf.squeeze(pred_gt_matching, 0))
-            match_Dreal = tf.gather(Dreal, tf.squeeze(gt_pred_matching, 0))
+            match_Dfake = tf.gather(Dfake, tf.squeeze(gt_pred_matching, 0))
+            match_Dreal = tf.gather(Dreal, tf.squeeze(pred_gt_matching, 0))
             feature_loss = 0.5 * tf.add(
                 tf.losses.mean_squared_error(Dreal, match_Dfake),
                 tf.losses.mean_squared_error(match_Dreal, Dfake),
@@ -294,8 +301,8 @@ def train():
 
             lr = get_learning_rate(global_step)
             surface_loss_wt = get_surface_loss_wt(global_step)
-            tf.summary.scalar("hyperparm/learning_rate", lr)
-            tf.summary.scalar("hyperparm/surface_loss_wt", surface_loss_wt)
+            tf.summary.scalar("hyperparam/learning_rate", lr)
+            tf.summary.scalar("hyperparam/surface_loss_wt", surface_loss_wt)
             """
             Use lower level ops to optimize Generator
             1. Compute gradient of G_loss wrt pred_pc = dLdP
@@ -306,23 +313,22 @@ def train():
             dLdG = tf.gradients(pred, G_vars, grad_ys=dLdP)
             dLdG_matching = tf.gradients(matching_loss, G_vars)  # Chamfer/EMD
             G_opt_ops = [
-                tf.assign(
-                    var,
-                    var - tf.clip_by_norm(lr * (grad2 + surface_loss_wt * grad1), 1),
-                )
+                tf.assign(var, var - tf.clip_by_norm(lr * (surface_loss_wt * grad1), 1))
                 for (var, grad1, grad2) in zip(G_vars, dLdG, dLdG_matching)
             ]
             with tf.control_dependencies(G_opt_ops):
                 G_opt_op = tf.assign(global_step, global_step + 1)
 
-            # # Gradient summaries
-            # gradient_sum = []
-            # for op in dLdG:
-            #     gradient_sum.append(
-            #         tf.summary.histogram(
-            #             "/".join(["gradients", *op.name.split("/")[1:], "graph"]), op
-            #         )
-            #     )
+            # Gradient summaries
+            gradient_sum = []
+            for op in dLdG:
+                gradient_sum.append(
+                    tf.summary.histogram(
+                        "/".join(["gradients", *op.name.split("/")[1:], "graph"]), op
+                    )
+                )
+            for var in G_vars:
+                tf.summary.histogram(var.name, var)
             # for op in dLdG_matching:
             #     gradient_sum.append(
             #         tf.summary.histogram(
@@ -369,6 +375,12 @@ def train():
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()  # saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
         gae_restorer = tf.train.Saver(var_list=gae_keyed_var_list)
+        pcn_vars = [
+            var
+            for var in tf.get_collection(tf.GraphKeys.VARIABLES)
+            if not var.name.startswith("feature_extractor")
+        ]
+        pcn_restorer = tf.train.Saver(var_list=pcn_vars)
 
         # Init variables
         ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
@@ -376,15 +388,20 @@ def train():
             saver.restore(sess, ckpt_path)
             start_epoch = int(ckpt_path.split("-")[-1]) + 1
         else:
-            init = tf.global_variables_initializer()
-            sess.run(init)
+            # init = tf.global_variables_initializer()
+            # sess.run(init)
+            start_epoch = 1
             gae_restorer.restore(
                 sess, tf.train.latest_checkpoint("/home/jayant/gae/log1e3")
             )
-            start_epoch = 1
+            ckpt_path = tf.train.latest_checkpoint(
+                "/home/jayant/pointnet-autoencoder/log_mano_baseline_centered"
+            )
+            pcn_restorer.restore(sess, ckpt_path)
+            sess.run(tf.assign(global_step, 0))
 
         num_files = get_num_files("train")  # set manually for now
-        num_batches = old_div(num_files, BATCH_SIZE)
+        num_batches = 100 # old_div(num_files, BATCH_SIZE)
         print_freq = min(num_batches, 10)
 
         for epoch in range(start_epoch, MAX_EPOCH + 1):
@@ -525,14 +542,24 @@ def eval():
         # sess.run(init, {is_training_pl:True})
 
         total_consistency_loss = 0
-        losses = [] 
+        losses = []
         num_files = get_num_files(split)
         k = 0
         # while True:
         for _ in tqdm(range(100)):
             # try:
             local, future, predicted, lss, clss, ns, pgm, gpm, adj = sess.run(
-                [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums, pred_gt_matching, gt_pred_matching, adj_dense],
+                [
+                    pointclouds_pl,
+                    labels_pl,
+                    pred,
+                    loss,
+                    consistency_loss,
+                    nums,
+                    pred_gt_matching,
+                    gt_pred_matching,
+                    adj_dense,
+                ],
                 feed_dict={is_training_pl: False},
             )
             local = np.squeeze(local)
@@ -557,11 +584,11 @@ def eval():
             # Bookkeeping
             k += 1
             data = {
-                "local": local, 
-                "gt": future, 
-                "predicted": predicted, 
-                "loss": lss, 
-                "fake_adj": fake_adj
+                "local": local,
+                "gt": future,
+                "predicted": predicted,
+                "loss": lss,
+                "fake_adj": fake_adj,
             }
             savemat("{}/{}.mat".format(LOG_DIR, n), data)
         print(
@@ -666,6 +693,6 @@ def eval_one_epoch(sess, ops, test_writer):
 
 
 if __name__ == "__main__":
-    # train()
+    train()
     eval()
     LOG_FOUT.close()
