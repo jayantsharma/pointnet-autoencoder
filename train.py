@@ -64,7 +64,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--epochs_to_wait",
-    type=int,
+    type=float,
     default=2,
     help="Epochs to wait before turning on the GAE loss",
 )
@@ -98,7 +98,7 @@ parser.add_argument(
 parser.add_argument(
     "--decay_step",
     type=int,
-    default=200000,
+    default=2000,
     help="Decay step for lr decay [default: 200000]",
 )
 parser.add_argument(
@@ -171,15 +171,22 @@ def get_learning_rate(batch):
 
 
 def get_surface_loss_wt(global_step):
-    num_files = get_num_files("train")  # set manually for now
+    num_files = 100 # get_num_files("train")  # set manually for now
     num_batches = old_div(num_files, BATCH_SIZE)
-    batches_to_wait = FLAGS.epochs_to_wait * num_batches
-    surface_loss_wt = tf.cond(
-        global_step < batches_to_wait,
-        lambda: tf.cast(0, tf.float32),
-        lambda: tf.cast(FLAGS.surface_loss_wt, tf.float32),
-    )
-    return surface_loss_wt
+    # batches_to_wait = FLAGS.epochs_to_wait * num_batches
+    # surface_loss_wt = tf.cond(
+    #     global_step < batches_to_wait,
+    #     lambda: tf.cast(0, tf.float32),
+    #     lambda: tf.cast(FLAGS.surface_loss_wt, tf.float32),
+    # )
+    surface_loss_wt = tf.minimum(
+            tf.divide(
+                tf.cast(global_step, tf.float32), 
+                FLAGS.epochs_to_wait * num_batches
+                ),
+            1.
+            )
+    return surface_loss_wt * FLAGS.surface_loss_wt
 
 
 def get_bn_decay(batch):
@@ -229,7 +236,7 @@ def train():
             # Note the global_step=batch parameter to minimize.
             # That tells the optimizer to helpfully increment the 'batch' parameter for you every time it trains.
             global_step = tf.Variable(0)
-            bn_decay = 1  # get_bn_decay(global_step)
+            bn_decay = BN_DECAY_CLIP # get_bn_decay(global_step)
             tf.summary.scalar("hyperparam/bn_decay", bn_decay)
 
             # Predict point cloud
@@ -260,7 +267,7 @@ def train():
             dropout = tf.placeholder_with_default(0.0, shape=())
 
             # GAE
-            dims = {"hidden1": 32, "hidden2": 16}
+            dims = {"hidden1": 64, "hidden2": 64, "hidden3": 64, "hidden4": 128, "hidden5": 1024}
             Dreal = GCNModelAE(
                 real_features_pl,
                 real_adj_norm_pl,
@@ -313,7 +320,7 @@ def train():
             dLdG = tf.gradients(pred, G_vars, grad_ys=dLdP)
             dLdG_matching = tf.gradients(matching_loss, G_vars)  # Chamfer/EMD
             G_opt_ops = [
-                tf.assign(var, var - tf.clip_by_norm(lr * (surface_loss_wt * grad1), 1))
+                tf.assign(var, var - tf.clip_by_norm(lr * (grad2 + surface_loss_wt * grad1), 1))
                 for (var, grad1, grad2) in zip(G_vars, dLdG, dLdG_matching)
             ]
             with tf.control_dependencies(G_opt_ops):
@@ -388,17 +395,21 @@ def train():
             saver.restore(sess, ckpt_path)
             start_epoch = int(ckpt_path.split("-")[-1]) + 1
         else:
-            # init = tf.global_variables_initializer()
-            # sess.run(init)
+            init = tf.global_variables_initializer()
+            sess.run(init)
             start_epoch = 1
             gae_restorer.restore(
-                sess, tf.train.latest_checkpoint("/home/jayant/gae/log1e3")
+                sess, tf.train.latest_checkpoint("/home/jayant/gae/log5layer_1e3_pw")
             )
-            ckpt_path = tf.train.latest_checkpoint(
-                "/home/jayant/pointnet-autoencoder/log_mano_baseline_centered"
-            )
-            pcn_restorer.restore(sess, ckpt_path)
-            sess.run(tf.assign(global_step, 0))
+            # ckpt_path = tf.train.latest_checkpoint(
+            #     "/home/jayant/pointnet-autoencoder/log_mano_baseline_centered"
+            # )
+            # pcn_restorer.restore(sess, ckpt_path)
+            # sess.run(tf.assign(global_step, 0))
+
+        # for pcn_var in pcn_vars:
+        #     v = sess.run(pcn_var)
+        #     print(pcn_var.name, np.linalg.norm(v))
 
         num_files = get_num_files("train")  # set manually for now
         num_batches = 100 # old_div(num_files, BATCH_SIZE)
@@ -433,6 +444,13 @@ def train():
                         complete_pl: cmplt,
                     },
                 )
+                data = {
+                    "local": np.squeeze(prtl),
+                    "gt": np.squeeze(cmplt),
+                    "predicted": np.squeeze(pred_pc),
+                    "loss": lss,
+                }
+                savemat("{}/train{}.mat".format(LOG_DIR, n[0]), data)
                 # Cut out the batch dim
                 fake_ftrs = np.squeeze(pred_pc, 0)
                 pgm = np.squeeze(pgm)
@@ -456,6 +474,7 @@ def train():
                     # nbrs = [el for n in nnz for el in rev_matching[n]]
                     nbrs = [gpm[n] for n in nnz]
                     fake_adj[i, nbrs] = 1
+                    fake_adj[nbrs, i] = 1   # Needs to be symmetric
                 # Set diagonals 0
                 for i in range(NUM_PRED):
                     fake_adj[i, i] = 0
@@ -502,7 +521,7 @@ def get_num_files(split):
 
 
 def eval():
-    split = "test"
+    split = "test100"
     with tf.Graph().as_default():
         pointclouds_pl, labels_pl, _, adj_sp, _, _, nums = input_pipeline(split)
         adj_dense = tf.sparse.to_dense(adj_sp)
@@ -538,6 +557,11 @@ def eval():
         ckpt_path = tf.train.latest_checkpoint(LOG_DIR)
         print(ckpt_path)
         saver.restore(sess, ckpt_path)
+
+        # varss = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+        # for pcn_var in varss:
+        #     v = sess.run(pcn_var)
+        #     print(pcn_var.name, np.linalg.norm(v))
         # init = tf.global_variables_initializer()
         # sess.run(init, {is_training_pl:True})
 
@@ -596,6 +620,8 @@ def eval():
                 k, sum(losses) / k, total_consistency_loss / k
             )
         )
+        # from scipy.stats import describe
+        # print(describe(losses))
 
 
 def get_batch(dataset, idxs, start_idx, end_idx):
@@ -694,5 +720,5 @@ def eval_one_epoch(sess, ops, test_writer):
 
 if __name__ == "__main__":
     train()
-    eval()
+    # eval()
     LOG_FOUT.close()
