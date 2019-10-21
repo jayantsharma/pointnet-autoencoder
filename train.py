@@ -106,7 +106,7 @@ parser.add_argument(
 parser.add_argument(
     "--decay_step",
     type=int,
-    default=200000,
+    default=100000,
     help="Decay step for lr decay [default: 200000]",
 )
 parser.add_argument(
@@ -226,7 +226,7 @@ def construct_feed_dict(features, support, placeholders):
 def train():
     with tf.Graph().as_default():
         partial, complete, features, _, _, adj_norm, nums = input_pipeline(
-            "train", BATCH_SIZE
+            "train100", BATCH_SIZE
         )
         # adj_orig_dense = tf.sparse.to_dense(adj_orig)
         # adj_norm_dense = tf.sparse.to_dense(adj_norm)
@@ -245,7 +245,7 @@ def train():
             # Note the global_step=batch parameter to minimize.
             # That tells the optimizer to helpfully increment the 'batch' parameter for you every time it trains.
             global_step = tf.Variable(0)
-            bn_decay = 1 # get_bn_decay(global_step)
+            bn_decay = BN_DECAY_CLIP # get_bn_decay(global_step)
             tf.summary.scalar("hyperparam/bn_decay", bn_decay)
 
             # Predict point cloud
@@ -284,7 +284,7 @@ def train():
             dropout = tf.placeholder_with_default(0.0, shape=())
 
             # GAE
-            dims = {"hidden1": 32, "hidden2": 16}
+            dims = {"hidden1": 64, "hidden2": 64, "hidden3": 64, "hidden4": 128, "hidden5": 1024}
             Dreal = GCNModelAE(
                 real_features_pl,
                 real_adj_norm_pl,
@@ -343,23 +343,23 @@ def train():
             G_opt_ops = [
                 tf.assign(
                     var,
-                    var - tf.clip_by_norm(lr * (surface_loss_wt * grad1), 1),
+                    var - tf.clip_by_norm(lr * (grad2 + surface_loss_wt * grad1), 1),
                 )
                 for (var, grad1, grad2) in zip(G_vars, dLdG, dLdG_matching)
             ]
             with tf.control_dependencies(G_opt_ops):
                 G_opt_op = tf.assign(global_step, global_step + 1)
 
-            # Gradient summaries
-            gradient_sum = []
-            for op in dLdG:
-                gradient_sum.append(
-                    tf.summary.histogram(
-                        "/".join(["gradients", *op.name.split("/")[1:], "graph"]), op
-                    )
-                )
-            for var in G_vars:
-                tf.summary.histogram(var.name, var)
+            # # Gradient summaries
+            # gradient_sum = []
+            # for op in dLdG:
+            #     gradient_sum.append(
+            #         tf.summary.histogram(
+            #             "/".join(["gradients", *op.name.split("/")[1:], "graph"]), op
+            #         )
+            #     )
+            # for var in G_vars:
+            #     tf.summary.histogram(var.name, var)
             # for op in dLdG_matching:
             #     gradient_sum.append(
             #         tf.summary.histogram(
@@ -419,20 +419,21 @@ def train():
             saver.restore(sess, ckpt_path)
             start_epoch = int(ckpt_path.split("-")[-1]) + 1
         else:
-            # init = tf.global_variables_initializer()
-            # sess.run(init)
+            init = tf.global_variables_initializer()
+            sess.run(init)
             start_epoch = 1
-            ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/log_mano_baseline_centered")
-            pcn_restorer.restore(sess, ckpt_path)
-            # start_epoch = int(ckpt_path.split("-")[-1]) + 1
             gae_restorer.restore(
-                sess, tf.train.latest_checkpoint("/home/jayant/gae/log1e3")
+                sess, tf.train.latest_checkpoint("/home/jayant/gae/log5layer_1e3_pw")
             )
-            sess.run(tf.assign(global_step, 0))
+            # ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/log_mano_baseline_centered")
+            # pcn_restorer.restore(sess, ckpt_path)
+            # start_epoch = int(ckpt_path.split("-")[-1]) + 1
+            # sess.run(tf.assign(global_step, 0))
 
-        num_files = get_num_files("train")  # set manually for now
+        num_files = 100 # get_num_files("train")  # set manually for now
         num_batches = old_div(num_files, BATCH_SIZE)
         print_freq = min(num_batches, 10)
+        save_freq = 10
 
         for epoch in range(start_epoch, MAX_EPOCH + 1):
             log_string("**** EPOCH %03d ****" % (epoch))
@@ -445,8 +446,8 @@ def train():
                 Run input pipeline to get gt
                 Required to pass gt as placeholder because Generator backprop is not done in same session call as forward pass
                 """
-                prtl, cmplt, real_ftrs, real_adj_norms = sess.run(
-                    [partial, complete, features, adj_norm_splits]
+                prtl, cmplt, real_ftrs, real_adj_norms, n = sess.run(
+                    [partial, complete, features, adj_norm_splits, nums]
                 )
 
                 """
@@ -461,6 +462,12 @@ def train():
                         complete_pl: cmplt,
                     },
                 )
+                for i in range(BATCH_SIZE):
+                    data = {
+                            "local": cmplt[i,:,:],
+                            "predicted": pred_pc[i,:,:]
+                            }
+                    savemat("%s/train%d.mat" % (LOG_DIR, n[i][0]), data)
 
                 """ 
                 Use Pred -> GT NN matching to induce graph on pred pc
@@ -534,7 +541,7 @@ def train():
                     print("Step: {}, Chamfer loss: {:.4f}".format(step, lss))
 
             # Save the variables to disk.
-            if epoch % 2 == 0:
+            if epoch % save_freq == 0:
                 save_path = saver.save(
                     sess, os.path.join(LOG_DIR, "model.ckpt"), global_step=epoch
                 )

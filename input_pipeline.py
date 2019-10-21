@@ -97,7 +97,7 @@ def preprocess(feat, label, fname_bytes):
 def input_pipeline(split, batch_size):
     files = tf.data.Dataset.list_files(os.path.join(ROOT, split + ".tfrecord"))
     dataset = tf.data.TFRecordDataset(files)
-    if split == "train":
+    if "train" in split:
         # pass
         dataset = dataset.repeat()
         dataset = dataset.shuffle(buffer_size=5000)
