@@ -135,15 +135,16 @@ def get_learning_rate(batch):
 
 
 def get_bn_decay(batch):
-    bn_momentum = tf.train.exponential_decay(
-        BN_INIT_DECAY,
-        batch * BATCH_SIZE,
-        BN_DECAY_DECAY_STEP,
-        BN_DECAY_DECAY_RATE,
-        staircase=True,
-    )
-    bn_decay = tf.minimum(BN_DECAY_CLIP, 1 - bn_momentum)
-    return bn_decay
+    # bn_momentum = tf.train.exponential_decay(
+    #     BN_INIT_DECAY,
+    #     batch * BATCH_SIZE,
+    #     BN_DECAY_DECAY_STEP,
+    #     BN_DECAY_DECAY_RATE,
+    #     staircase=True,
+    # )
+    # bn_decay = tf.minimum(BN_DECAY_CLIP, 1 - bn_momentum)
+    # return bn_decay
+    return BN_DECAY_CLIP
 
 
 def get_consistency_loss_wt(global_step):
@@ -158,7 +159,7 @@ def get_consistency_loss_wt(global_step):
 
 def train():
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, fnames = input_pipeline("train", BATCH_SIZE)
+        pointclouds_pl, labels_pl, fnames = input_pipeline("train100", BATCH_SIZE)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
             is_training_pl = tf.placeholder(tf.bool, shape=())
@@ -199,20 +200,20 @@ def train():
                 optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=MOMENTUM)
             elif OPTIMIZER == "adam":
                 optimizer = tf.train.AdamOptimizer(learning_rate)
-            grads_and_vars = optimizer.compute_gradients(matching_loss)
-            grads_and_vars = optimizer.compute_gradients(consistency_loss)
+            # grads_and_vars = optimizer.compute_gradients(matching_loss)
+            # grads_and_vars = optimizer.compute_gradients(consistency_loss)
 
             grads_and_vars = optimizer.compute_gradients(loss)
             train_op = optimizer.apply_gradients(
                 grads_and_vars, global_step=global_step
             )
 
-            # Plot gradients wrt prediction - should be diff when loss includes plane regularization
-            G = tf.get_default_graph()
-            # emd_grad = G.get_operation_by_name('gradients/MatchCost_grad/tuple/control_dependency_1').outputs[0]
-            plane_grad = G.get_operation_by_name('gradients_1/PlaneDistance_grad/PlaneDistanceGrad').outputs[0]
-            # tf.summary.histogram("emd_prediction_gradient", emd_grad)
-            tf.summary.histogram("plane_prediction_gradient", plane_grad)
+            # # Plot gradients wrt prediction - should be diff when loss includes plane regularization
+            # G = tf.get_default_graph()
+            # # emd_grad = G.get_operation_by_name('gradients/MatchCost_grad/tuple/control_dependency_1').outputs[0]
+            # plane_grad = G.get_operation_by_name('gradients_1/PlaneDistance_grad/PlaneDistanceGrad').outputs[0]
+            # # tf.summary.histogram("emd_prediction_gradient", emd_grad)
+            # tf.summary.histogram("plane_prediction_gradient", plane_grad)
 
             # Add ops to save and restore all the variables.
             saver = tf.train.Saver()
@@ -280,7 +281,7 @@ def get_num_files(split):
 
 def eval():
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, nums = input_pipeline('test', 1)
+        pointclouds_pl, labels_pl, nums = input_pipeline('train100', 1)
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
             is_training_pl = tf.placeholder(tf.bool, shape=())
@@ -319,7 +320,7 @@ def eval():
         num_files = get_num_files('train')
         # i = 0
         # while True:
-        for i in tqdm(range(1000)):
+        for i in tqdm(range(100)):
             # try:
             local, future, predicted, lss, clss, ns = sess.run(
                 [pointclouds_pl, labels_pl, pred, loss, consistency_loss, nums],
@@ -364,7 +365,7 @@ def train_one_epoch(sess, ops, train_writer):
     is_training = True
 
     # Shuffle train samples
-    num_files = get_num_files('train')      # set manually for now
+    num_files = 100 # get_num_files('train')      # set manually for now
     num_batches = old_div(num_files, BATCH_SIZE)
 
     loss_sum = 0
@@ -376,7 +377,7 @@ def train_one_epoch(sess, ops, train_writer):
         # else:
         #     aug_data = part_dataset.rotate_point_cloud(batch_data)
         feed_dict = {ops["is_training_pl"]: is_training}
-        summary, step, _, loss_val, pcloss_val, pred_val, fnames = sess.run(
+        summary, step, _, loss_val, pcloss_val, pred_val, fnames, gts = sess.run(
             [
                 ops["merged"],
                 ops["step"],
@@ -385,12 +386,20 @@ def train_one_epoch(sess, ops, train_writer):
                 ops["end_points"]["pcloss"],
                 ops["pred"],
                 ops["fnames"],
+                ops["labels_pl"]
             ],
             feed_dict=feed_dict,
         )
         train_writer.add_summary(summary, step)
         loss_sum += loss_val
         pcloss_sum += pcloss_val
+
+        for i in range(BATCH_SIZE):
+            data = {
+                    "gt": np.squeeze(gts[i,:,:]),
+                    "predicted": np.squeeze(pred_val[i,:,:])
+                    }
+            savemat("%s/train%d.mat" % (LOG_DIR, fnames[i][0]), data)
 
         if (batch_idx + 1) % 10 == 0:
             log_string(" -- %03d / %03d --" % (batch_idx + 1, num_batches))
@@ -445,5 +454,5 @@ def eval_one_epoch(sess, ops, test_writer):
 if __name__ == "__main__":
     log_string("pid: %s" % (str(os.getpid())))
     train()
-    eval()
+    # eval()
     LOG_FOUT.close()
