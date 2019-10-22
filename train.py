@@ -350,7 +350,7 @@ def train():
             G_opt_ops = [
                 tf.assign(
                     var,
-                    var - tf.clip_by_norm(lr * (surface_loss_wt * grad1), 1),
+                    var - tf.clip_by_norm(lr * (grad2 + surface_loss_wt * grad1), 1),
                 )
                 for (var, grad1, grad2) in zip(G_vars, dLdG, dLdG_matching)
             ]
