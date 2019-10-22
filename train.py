@@ -350,7 +350,7 @@ def train():
             G_opt_ops = [
                 tf.assign(
                     var,
-                    var - tf.clip_by_norm(lr * (grad2 + surface_loss_wt * grad1), 1),
+                    var - tf.clip_by_norm(lr * (surface_loss_wt * grad1), 1),
                 )
                 for (var, grad1, grad2) in zip(G_vars, dLdG, dLdG_matching)
             ]
@@ -432,7 +432,7 @@ def train():
             gae_restorer.restore(
                 sess, tf.train.latest_checkpoint("/home/jayant/gae/log5layer_1e3_pw")
             )
-            ckpt_path = "/home/jayant/pointnet-autoencoder/log_chamfer_lr1e-3/model.ckpt-5000"
+            ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/log_chamfer_lr1e-3")
             pcn_restorer.restore(sess, ckpt_path)
             start_epoch = int(ckpt_path.split("-")[-1]) + 1
             # sess.run(tf.assign(global_step, 0))
