@@ -72,7 +72,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--epochs_to_wait",
-    type=int,
+    type=float,
     default=2,
     help="Epochs to wait before turning on the GAE loss",
 )
@@ -179,15 +179,22 @@ def get_learning_rate(batch):
 
 
 def get_surface_loss_wt(global_step):
-    num_files = get_num_files("train")  # set manually for now
+    num_files = 100 # get_num_files("train")  # set manually for now
     num_batches = old_div(num_files, BATCH_SIZE)
-    batches_to_wait = FLAGS.epochs_to_wait * num_batches
-    surface_loss_wt = tf.cond(
-        global_step < batches_to_wait,
-        lambda: tf.cast(0, tf.float32),
-        lambda: tf.cast(FLAGS.surface_loss_wt, tf.float32),
-    )
-    return surface_loss_wt
+    # batches_to_wait = FLAGS.epochs_to_wait * num_batches
+    # surface_loss_wt = tf.cond(
+    #     global_step < batches_to_wait,
+    #     lambda: tf.cast(0, tf.float32),
+    #     lambda: tf.cast(FLAGS.surface_loss_wt, tf.float32),
+    # )
+    surface_loss_wt = tf.minimum(
+            tf.divide(
+                tf.cast(global_step, tf.float32),
+                FLAGS.epochs_to_wait * num_batches
+                ),
+            1.
+            )
+    return surface_loss_wt * FLAGS.surface_loss_wt
 
 
 def get_bn_decay(batch):
@@ -326,7 +333,7 @@ def train():
                 "/".join(["gcnmodelae", *v.name[:-2].split("/")[1:]]): v for v in F_vars
             }
 
-            lr = get_learning_rate(global_step)
+            lr = BASE_LEARNING_RATE # get_learning_rate(global_step)
             surface_loss_wt = get_surface_loss_wt(global_step)
             tf.summary.scalar("hyperparam/learning_rate", lr)
             tf.summary.scalar("hyperparam/surface_loss_wt", surface_loss_wt)
@@ -408,7 +415,7 @@ def train():
         gae_restorer = tf.train.Saver(var_list=gae_keyed_var_list)
         pcn_vars = [
             var
-            for var in tf.get_collection(tf.GraphKeys.VARIABLES)
+            for var in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
             if not var.name.startswith("feature_extractor")
         ]
         pcn_restorer = tf.train.Saver(var_list=pcn_vars)
@@ -419,21 +426,21 @@ def train():
             saver.restore(sess, ckpt_path)
             start_epoch = int(ckpt_path.split("-")[-1]) + 1
         else:
-            init = tf.global_variables_initializer()
-            sess.run(init)
-            start_epoch = 1
+            # init = tf.global_variables_initializer()
+            # sess.run(init)
+            # start_epoch = 1
             gae_restorer.restore(
                 sess, tf.train.latest_checkpoint("/home/jayant/gae/log5layer_1e3_pw")
             )
-            # ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/log_mano_baseline_centered")
-            # pcn_restorer.restore(sess, ckpt_path)
-            # start_epoch = int(ckpt_path.split("-")[-1]) + 1
+            ckpt_path = "/home/jayant/pointnet-autoencoder/log_chamfer_lr1e-3/model.ckpt-5000"
+            pcn_restorer.restore(sess, ckpt_path)
+            start_epoch = int(ckpt_path.split("-")[-1]) + 1
             # sess.run(tf.assign(global_step, 0))
 
         num_files = 100 # get_num_files("train")  # set manually for now
         num_batches = old_div(num_files, BATCH_SIZE)
         print_freq = min(num_batches, 10)
-        save_freq = 10
+        save_freq = 500
 
         for epoch in range(start_epoch, MAX_EPOCH + 1):
             log_string("**** EPOCH %03d ****" % (epoch))
@@ -464,7 +471,7 @@ def train():
                 )
                 for i in range(BATCH_SIZE):
                     data = {
-                            "local": cmplt[i,:,:],
+                            "gt": cmplt[i,:,:],
                             "predicted": pred_pc[i,:,:]
                             }
                     savemat("%s/train%d.mat" % (LOG_DIR, n[i][0]), data)
