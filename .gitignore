@@ -5,3 +5,5 @@ log*/*
 **/*swp
 **/*.csv
 **/*.txt
+*log
+test_*

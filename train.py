@@ -504,6 +504,7 @@ def train():
                         nnz = adj_list[pgm[b][i]]
                         nbrs = [gpm[b][n] for n in nnz]
                         fake_adj[i, nbrs] = 1
+                        fake_adj[nbrs, i] = 1   # Needs to be symmetric
                     # Set diagonals 0
                     for i in range(NUM_PRED):
                         fake_adj[i, i] = 0
