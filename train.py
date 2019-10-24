@@ -334,7 +334,7 @@ def train():
             }
 
             lr = BASE_LEARNING_RATE # get_learning_rate(global_step)
-            surface_loss_wt = get_surface_loss_wt(global_step)
+            surface_loss_wt = FLAGS.surface_loss_wt # get_surface_loss_wt(global_step)
             tf.summary.scalar("hyperparam/learning_rate", lr)
             tf.summary.scalar("hyperparam/surface_loss_wt", surface_loss_wt)
             """
@@ -432,10 +432,10 @@ def train():
             gae_restorer.restore(
                 sess, tf.train.latest_checkpoint("/home/jayant/gae/log5layer_1e3_pw")
             )
-            ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/log_chamfer_lr1e-3")
+            ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/mano_centered_small_lr1e-3")
             pcn_restorer.restore(sess, ckpt_path)
             start_epoch = int(ckpt_path.split("-")[-1]) + 1
-            # sess.run(tf.assign(global_step, 0))
+            sess.run(tf.assign(global_step, 0))
 
         num_files = 100 # get_num_files("train")  # set manually for now
         num_batches = old_div(num_files, BATCH_SIZE)
@@ -469,12 +469,12 @@ def train():
                         complete_pl: cmplt,
                     },
                 )
-                for i in range(BATCH_SIZE):
-                    data = {
-                            "gt": cmplt[i,:,:],
-                            "predicted": pred_pc[i,:,:]
-                            }
-                    savemat("%s/train%d.mat" % (LOG_DIR, n[i][0]), data)
+                # for i in range(BATCH_SIZE):
+                #     data = {
+                #             "gt": cmplt[i,:,:],
+                #             "predicted": pred_pc[i,:,:]
+                #             }
+                #     savemat("%s/train%d.mat" % (LOG_DIR, n[i][0]), data)
 
                 """ 
                 Use Pred -> GT NN matching to induce graph on pred pc
@@ -508,6 +508,14 @@ def train():
                     # Set diagonals 0
                     for i in range(NUM_PRED):
                         fake_adj[i, i] = 0
+                    # Save data now that we have fake_adj
+                    data = {
+                            "gt": cmplt[b,:,:],
+                            "predicted": pred_pc[b,:,:],
+                            "fake_adj": fake_adj
+                            }
+                    savemat("%s/train%d.mat" % (LOG_DIR, n[b][0]), data)
+                    # Normalize and append
                     fake_adj_norm = preprocess_adj_notuple(fake_adj)
                     fake_adj_norms.append(fake_adj_norm)
 
