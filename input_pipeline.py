@@ -46,12 +46,18 @@ def _parse_example(serialized_record):
 
     partial = tf.decode_raw(example["partial"], tf.float64)
     complete = tf.decode_raw(example["complete"], tf.float64)
+    adj_orig_coords = tf.decode_raw(example["adj_orig_coords"], tf.int32)
+    adj_orig_values = tf.decode_raw(example["adj_orig_values"], tf.float64)
     num = tf.decode_raw(example["num"], tf.int64)
 
     partial = tf.cast(tf.reshape(partial, (553,3)), tf.float32)
     complete = tf.cast(tf.reshape(complete, (768,3)), tf.float32)
+    # Wrap in SparseTensor in addition
+    adj_orig_coords = tf.cast(tf.reshape(adj_orig_coords, (-1, 2)), tf.int64)
+    adj_orig_values = tf.cast(adj_orig_values, tf.float32)
+    adj_orig = tf.SparseTensor(adj_orig_coords, adj_orig_values, [768, 768])
 
-    return partial, complete, num
+    return partial, complete, adj_orig, num
 
 
 def preprocess(feat, label, fname_bytes):
@@ -81,13 +87,13 @@ def input_pipeline(split, batch_size):
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(buffer_size=batch_size)
     iterator = dataset.make_one_shot_iterator()
-    feat, label, num = iterator.get_next()
+    feat, label, adj_orig, num = iterator.get_next()
 
     # Set shapes - makes life easy
     feat.set_shape([batch_size, 553, 3])
     label.set_shape([batch_size, 768, 3])
 
-    return feat, label, num
+    return feat, label, adj_orig, num
 
 
 def test_pipeline():

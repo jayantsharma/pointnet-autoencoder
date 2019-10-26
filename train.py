@@ -83,6 +83,7 @@ FLAGS = parser.parse_args()
 EPOCH_CNT = 0
 
 BATCH_SIZE = FLAGS.batch_size
+NUM_PRED = 768
 NUM_POINT = FLAGS.num_point
 MAX_EPOCH = FLAGS.max_epoch
 BASE_LEARNING_RATE = FLAGS.learning_rate
@@ -159,7 +160,10 @@ def get_consistency_loss_wt(global_step):
 
 def train():
     with tf.Graph().as_default():
-        pointclouds_pl, labels_pl, fnames = input_pipeline("train100", BATCH_SIZE)
+        pointclouds_pl, labels_pl, adj_orig, fnames = input_pipeline("train100", BATCH_SIZE)
+        adj_orig_splits = tf.sparse.split(
+                sp_input=adj_orig, num_split=BATCH_SIZE, axis=0
+                )
 
         with tf.device("/gpu:" + str(GPU_INDEX)):
             is_training_pl = tf.placeholder(tf.bool, shape=())
@@ -181,7 +185,7 @@ def train():
             1. Matching distribution loss imposed between predicted and target point clouds via Chamfer or EMD
             2. Self-consistency loss for better alignment of planes imposed on prediction
             """
-            matching_loss, end_points = MODEL.get_matching_loss(
+            matching_loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(
                 pred, labels_pl, end_points
             )
             # end_points["pcloss"] = tf.constant(42)
@@ -251,6 +255,9 @@ def train():
             "step": global_step,
             "fnames": fnames,
             "end_points": end_points,
+            "adj_orig_splits": adj_orig_splits,
+            "pgm": pred_gt_matching,
+            "gpm": gt_pred_matching
         }
 
         for epoch in range(start_epoch, MAX_EPOCH + 1):
@@ -377,7 +384,7 @@ def train_one_epoch(sess, ops, train_writer):
         # else:
         #     aug_data = part_dataset.rotate_point_cloud(batch_data)
         feed_dict = {ops["is_training_pl"]: is_training}
-        summary, step, _, loss_val, pcloss_val, pred_val, fnames, gts = sess.run(
+        summary, step, _, loss_val, pcloss_val, pred_val, fnames, gts, real_adj_origs, pgm, gpm = sess.run(
             [
                 ops["merged"],
                 ops["step"],
@@ -386,7 +393,10 @@ def train_one_epoch(sess, ops, train_writer):
                 ops["end_points"]["pcloss"],
                 ops["pred"],
                 ops["fnames"],
-                ops["labels_pl"]
+                ops["labels_pl"],
+                ops["adj_orig_splits"],
+                ops["pgm"],
+                ops["gpm"]
             ],
             feed_dict=feed_dict,
         )
@@ -394,12 +404,31 @@ def train_one_epoch(sess, ops, train_writer):
         loss_sum += loss_val
         pcloss_sum += pcloss_val
 
-        for i in range(BATCH_SIZE):
+        for b in range(BATCH_SIZE):
+            adj_list = [[] for _ in range(NUM_PRED)]  # defaultdict(list)
+            coords = real_adj_origs[b][0]
+            for (_, r, c) in coords:
+                if r != c:  # Because adj_norm has self-connectivity
+                    adj_list[r].append(c)
+            fake_adj = np.zeros((NUM_PRED, NUM_PRED))
+            # for i, row in enumerate(adj[pgm[b], :]):
+            # nnz = np.nonzero(row)[0]
+            # nbrs = [el for n in nnz for el in rev_matching[n]]
+            for i in range(NUM_PRED):
+                nnz = adj_list[pgm[b][i]]
+                nbrs = [gpm[b][n] for n in nnz]
+                fake_adj[i, nbrs] = 1
+                fake_adj[nbrs, i] = 1   # Needs to be symmetric
+            # Set diagonals 0
+            for i in range(NUM_PRED):
+                fake_adj[i, i] = 0
+
             data = {
-                    "gt": np.squeeze(gts[i,:,:]),
-                    "predicted": np.squeeze(pred_val[i,:,:])
+                    "gt": np.squeeze(gts[b,:,:]),
+                    "predicted": np.squeeze(pred_val[b,:,:]),
+                    "fake_adj": fake_adj
                     }
-            savemat("%s/train%d.mat" % (LOG_DIR, fnames[i][0]), data)
+            savemat("%s/train%d.mat" % (LOG_DIR, fnames[b][0]), data)
 
         if (batch_idx + 1) % 10 == 0:
             log_string(" -- %03d / %03d --" % (batch_idx + 1, num_batches))
