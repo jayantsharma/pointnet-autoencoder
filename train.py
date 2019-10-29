@@ -220,7 +220,7 @@ def train():
             # tf.summary.histogram("plane_prediction_gradient", plane_grad)
 
             # Add ops to save and restore all the variables.
-            saver = tf.train.Saver()
+            saver = tf.train.Saver(max_to_keep=None)
             # saver = tf.train.Saver(max_to_keep=MAX_EPOCH)
 
         # Create a session
@@ -272,7 +272,7 @@ def train():
             #     log_string("Model saved in file: %s" % save_path)
 
             # Save the variables to disk.
-            if epoch % 10 == 0:
+            if epoch % 1000 == 0:
                 save_path = saver.save(
                     sess, os.path.join(LOG_DIR, "model.ckpt"), global_step=epoch
                 )
