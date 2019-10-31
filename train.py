@@ -261,7 +261,7 @@ def train():
                     partial_pl, is_training_pl, bn_decay=bn_decay
                 )
             # Construct proxy mesh using NN matching
-            matching_loss, end_points, pred_gt_matching, gt_pred_matching = MODEL.get_matching_loss(
+            matching_loss, end_points, pred_gt_matching, gt_pred_matching, loss_per_cloud = MODEL.get_matching_loss(
                 pred, complete_pl, end_points
             )
 
@@ -432,7 +432,8 @@ def train():
             gae_restorer.restore(
                 sess, tf.train.latest_checkpoint("/home/jayant/gae/log5layer_1e3_pw")
             )
-            ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/mano_centered_small_lr1e-3")
+            ckpt_path = "/home/jayant/pointnet-autoencoder/mano_centered_small_lr1e-3/model.ckpt-12000"
+            # ckpt_path = tf.train.latest_checkpoint("/home/jayant/pointnet-autoencoder/mano_centered_small_lr1e-3")
             pcn_restorer.restore(sess, ckpt_path)
             start_epoch = int(ckpt_path.split("-")[-1]) + 1
             sess.run(tf.assign(global_step, 0))
@@ -461,8 +462,8 @@ def train():
                 STEP 2
                 Predict point cloud and process its induced graph
                 """
-                pred_pc, pgm, gpm, lss = sess.run(
-                    [pred, pred_gt_matching, gt_pred_matching, matching_loss],
+                pred_pc, pgm, gpm, lss, lss_per_pc = sess.run(
+                    [pred, pred_gt_matching, gt_pred_matching, matching_loss, loss_per_cloud],
                     feed_dict={
                         is_training_pl: True,
                         partial_pl: prtl,
@@ -512,7 +513,8 @@ def train():
                     data = {
                             "gt": cmplt[b,:,:],
                             "predicted": pred_pc[b,:,:],
-                            "fake_adj": fake_adj
+                            "fake_adj": fake_adj,
+                            "loss": lss_per_pc[b]
                             }
                     savemat("%s/train%d.mat" % (LOG_DIR, n[b][0]), data)
                     # Normalize and append

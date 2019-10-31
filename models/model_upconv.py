@@ -102,7 +102,8 @@ def get_matching_loss(pred, label, end_points):
     loss = tf.reduce_mean(dists_forward+dists_backward)
     end_points['pcloss'] = loss
     loss *= 100
-    return loss, end_points, forward_matching, backward_matching
+    loss_per_cloud = tf.reduce_mean(dists_forward + dists_backward, axis=1)
+    return loss, end_points, forward_matching, backward_matching, loss_per_cloud
 
     # # EMD
     # match = tf_approxmatch.approx_match(label, pred)
