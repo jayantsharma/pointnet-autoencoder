@@ -18,6 +18,7 @@ import pickle
 from scipy.io import savemat
 from tqdm import tqdm
 from glob import glob
+from collections import defaultdict
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
@@ -405,11 +406,18 @@ def train_one_epoch(sess, ops, train_writer):
         pcloss_sum += pcloss_val
 
         for b in range(BATCH_SIZE):
+            """
+            Adjacency List
+            """
             adj_list = [[] for _ in range(NUM_PRED)]  # defaultdict(list)
             coords = real_adj_origs[b][0]
             for (_, r, c) in coords:
                 if r != c:  # Because adj_norm has self-connectivity
                     adj_list[r].append(c)
+
+            """
+            PGM + GPM
+            """
             fake_adj = np.zeros((NUM_PRED, NUM_PRED))
             # for i, row in enumerate(adj[pgm[b], :]):
             # nnz = np.nonzero(row)[0]
@@ -423,10 +431,52 @@ def train_one_epoch(sess, ops, train_writer):
             for i in range(NUM_PRED):
                 fake_adj[i, i] = 0
 
+            """
+            PGM
+            """
+            # GT -> Pred rev_matching from Pred -> GT matching
+            rev_matching = defaultdict(list)
+            for k, v in enumerate(pgm[b]):
+                rev_matching[v].append(k)
+            # Loop over each vertex filling in the (fake) adjacency matrix
+            pgm_fake_adj = np.zeros((NUM_PRED, NUM_PRED))
+            for i in range(NUM_PRED):
+                nnz = adj_list[pgm[b][i]]
+                nbrs = [el for n in nnz for el in rev_matching[n]]
+                pgm_fake_adj[i, nbrs] = 1
+            # Set diagonals 0
+            for i in range(NUM_PRED):
+                pgm_fake_adj[i, i] = 0
+            assert np.allclose(pgm_fake_adj, pgm_fake_adj.T) # should be symmetric
+
+            """
+            GPM
+            """
+            # Derive Pred -> GT matching from gpm
+            matching = {}
+            for k, v in enumerate(gpm[b]):
+                matching[v] = k
+            # Loop over each vertex filling in the (fake) adjacency matrix
+            gpm_fake_adj = np.zeros((NUM_PRED, NUM_PRED))
+            for i in range(NUM_PRED):
+                if i in matching:
+                    nnz = adj_list[matching[i]]
+                    nbrs = [gpm[b][n] for n in nnz]
+                    gpm_fake_adj[i, nbrs] = 1
+                    gpm_fake_adj[nbrs, i] = 1   # Needs to be symmetric
+            # Set diagonals 0
+            for i in range(NUM_PRED):
+                gpm_fake_adj[i, i] = 0
+
+            """
+            SAVE
+            """
             data = {
                     "gt": np.squeeze(gts[b,:,:]),
                     "predicted": np.squeeze(pred_val[b,:,:]),
-                    "fake_adj": fake_adj
+                    "fake_adj": fake_adj,
+                    "pgm_fake_adj": pgm_fake_adj,
+                    "gpm_fake_adj": gpm_fake_adj
                     }
             savemat("%s/train%d.mat" % (LOG_DIR, fnames[b][0]), data)
 
